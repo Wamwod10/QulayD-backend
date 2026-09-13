@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: qulay-backend
+    runtime: node
+    plan: starter
+    rootDir: backend
+    buildCommand: npm ci && npm run build && npm run prisma:migrate:deploy && npm run prisma:seed
+    startCommand: npm start
+    healthCheckPath: /api/v1/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22.22.0
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: UPLOAD_DIR
+        value: /var/data/qulay-uploads
+    disk:
+      name: qulay-uploads
+      mountPath: /var/data
+      sizeGB: 1

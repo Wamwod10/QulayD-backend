@@ -1,0 +1,1587 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum RecordStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum CompanyStatus {
+  TRIAL
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum EmployeeStatus {
+  INVITED
+  ACTIVE
+  BLOCKED
+  TERMINATED
+}
+
+enum OrderStatus {
+  DRAFT
+  PENDING_APPROVAL
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+enum FulfillmentStatus {
+  UNFULFILLED
+  RESERVED
+  PICKING
+  PICKED
+  PACKING
+  PACKED
+  FULFILLED
+  CANCELLED
+}
+
+enum DeliveryStatus {
+  NOT_PLANNED
+  PLANNED
+  OUT_FOR_DELIVERY
+  ARRIVED
+  DELIVERED
+  PARTIALLY_DELIVERED
+  FAILED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  QR
+  BANK
+  CREDIT
+  MIXED
+  OTHER
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  VOID
+}
+
+enum StockMovementType {
+  OPENING
+  GOODS_RECEIPT
+  SALE
+  RETURN_IN
+  RETURN_OUT
+  TRANSFER_OUT
+  TRANSFER_IN
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  COUNT_CORRECTION
+  RESERVATION
+  RESERVATION_RELEASE
+}
+
+enum DocumentStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ReservationStatus {
+  ACTIVE
+  RELEASED
+  CONSUMED
+  CANCELLED
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+}
+
+enum CashTransactionType {
+  OPENING
+  SALE
+  REFUND
+  INCOME
+  EXPENSE
+  CASH_IN
+  CASH_OUT
+  CLOSING
+}
+
+enum LedgerSide {
+  DEBIT
+  CREDIT
+}
+
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+  ACTION_REQUIRED
+}
+
+enum NotificationStatus {
+  UNREAD
+  READ
+  ARCHIVED
+}
+
+enum UploadStatus {
+  PENDING
+  READY
+  FAILED
+  DELETED
+}
+
+enum VisitStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  MISSED
+  CANCELLED
+}
+
+enum ReturnStatus {
+  DRAFT
+  REQUESTED
+  INSPECTING
+  APPROVED
+  REJECTED
+  RECEIVED
+  REFUNDED
+  CANCELLED
+}
+
+model Company {
+  id                String                @id @default(uuid()) @db.Uuid
+  name              String
+  legalName         String?
+  taxId             String?
+  phone             String?
+  email             String?
+  address           String?
+  plan              String                @default("TRIAL")
+  status            CompanyStatus         @default(TRIAL)
+  trialEndsAt       DateTime?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  deletedAt         DateTime?
+  branches          Branch[]
+  warehouses        Warehouse[]
+  employees         Employee[]
+  roles             Role[]
+  categories        Category[]
+  units             Unit[]
+  products          Product[]
+  priceLists        PriceList[]
+  customers         Customer[]
+  suppliers         Supplier[]
+  orders            Order[]
+  payments          Payment[]
+  invoices          Invoice[]
+  cashboxes         Cashbox[]
+  settings          Settings?
+  sessions          Session[]
+  uploads           Upload[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+  documentSequences DocumentSequence[]
+  employeeTypes     EmployeeType[]
+  paymentMethods    PaymentMethodConfig[]
+  heldCarts         HeldCart[]
+  approvals         Approval[]
+  currencyRates     CurrencyRate[]
+
+  @@index([status])
+}
+
+model Branch {
+  id         String       @id @default(uuid()) @db.Uuid
+  companyId  String       @db.Uuid
+  name       String
+  code       String
+  address    String?
+  phone      String?
+  status     RecordStatus @default(ACTIVE)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  deletedAt  DateTime?
+  company    Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  warehouses Warehouse[]
+  employees  Employee[]
+  orders     Order[]
+  cashboxes  Cashbox[]
+
+  @@unique([companyId, code])
+  @@index([companyId, status])
+}
+
+model Warehouse {
+  id               String             @id @default(uuid()) @db.Uuid
+  companyId        String             @db.Uuid
+  branchId         String?            @db.Uuid
+  name             String
+  code             String
+  address          String?
+  latitude         Decimal?           @db.Decimal(10, 7)
+  longitude        Decimal?           @db.Decimal(10, 7)
+  status           RecordStatus       @default(ACTIVE)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  deletedAt        DateTime?
+  company          Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch           Branch?            @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  employees        Employee[]
+  stocks           WarehouseStock[]
+  movements        StockMovement[]
+  reservations     StockReservation[]
+  sourceTransfers  StockTransfer[]    @relation("TransferSource")
+  targetTransfers  StockTransfer[]    @relation("TransferTarget")
+  inventoryCounts  InventoryCount[]
+  stockAdjustments StockAdjustment[]
+  orders           Order[]
+  goodsReceipts    GoodsReceipt[]
+  cashboxes        Cashbox[]
+  deliveryTrips    DeliveryTrip[]
+
+  @@unique([companyId, code])
+  @@index([companyId, branchId, status])
+}
+
+model Employee {
+  id                 String               @id @default(uuid()) @db.Uuid
+  companyId          String               @db.Uuid
+  branchId           String?              @db.Uuid
+  warehouseId        String?              @db.Uuid
+  employeeTypeId     String?              @db.Uuid
+  login              String?              @unique
+  phone              String?              @unique
+  email              String?              @unique
+  name               String
+  title              String?
+  passwordHash       String
+  pinHash            String?
+  mustChangePassword Boolean              @default(false)
+  status             EmployeeStatus       @default(INVITED)
+  lastLoginAt        DateTime?
+  tokenVersion       Int                  @default(0)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  deletedAt          DateTime?
+  company            Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch             Branch?              @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  warehouse          Warehouse?           @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  employeeType       EmployeeType?        @relation(fields: [employeeTypeId], references: [id], onDelete: SetNull)
+  roles              EmployeeRole[]
+  modules            EmployeeModule[]
+  sessions           Session[]
+  passwordResets     PasswordResetToken[]
+  createdOrders      Order[]              @relation("OrderCreator")
+  assignedOrders     Order[]              @relation("OrderAgent")
+  stockMovements     StockMovement[]
+  notifications      Notification[]
+  notificationReads  NotificationRead[]
+  auditLogs          AuditLog[]
+  shifts             Shift[]
+  payments           Payment[]
+  visits             Visit[]
+  salaryKpis         EmployeeKpi[]
+  salaryPayments     SalaryPayment[]
+  deliveryTrips      DeliveryTrip[]       @relation("TripDriver")
+  routeTemplates     RouteTemplate[]      @relation("TemplateAgent")
+  routePlans         RoutePlan[]          @relation("PlanAgent")
+  heldCarts          HeldCart[]
+  approvalsRequested Approval[]           @relation("ApprovalRequester")
+  approvalsReviewed  Approval[]           @relation("ApprovalReviewer")
+
+  @@index([companyId, status])
+}
+
+model Role {
+  id          String           @id @default(uuid()) @db.Uuid
+  companyId   String?          @db.Uuid
+  code        String
+  name        String
+  description String?
+  isSystem    Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  company     Company?         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employees   EmployeeRole[]
+  permissions RolePermission[]
+
+  @@unique([companyId, code])
+  @@index([companyId])
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  code        String           @unique
+  module      String
+  action      String
+  description String?
+  createdAt   DateTime         @default(now())
+  roles       RolePermission[]
+
+  @@index([module])
+}
+
+model EmployeeRole {
+  employeeId String   @db.Uuid
+  roleId     String   @db.Uuid
+  assignedAt DateTime @default(now())
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([employeeId, roleId])
+}
+
+model RolePermission {
+  roleId       String     @db.Uuid
+  permissionId String     @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model EmployeeModule {
+  id         String   @id @default(uuid()) @db.Uuid
+  employeeId String   @db.Uuid
+  module     String
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, module])
+  @@index([employeeId, enabled])
+}
+
+model Category {
+  id          String       @id @default(uuid()) @db.Uuid
+  companyId   String       @db.Uuid
+  parentId    String?      @db.Uuid
+  name        String
+  code        String?
+  description String?
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  deletedAt   DateTime?
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  parent      Category?    @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Category[]   @relation("CategoryTree")
+  products    Product[]
+
+  @@unique([companyId, name])
+  @@unique([companyId, code])
+  @@index([companyId, status])
+}
+
+model Unit {
+  id        String       @id @default(uuid()) @db.Uuid
+  companyId String       @db.Uuid
+  name      String
+  shortName String
+  precision Int          @default(0)
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  company   Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  products  Product[]
+
+  @@unique([companyId, name])
+  @@unique([companyId, shortName])
+}
+
+model Product {
+  id              String                @id @default(uuid()) @db.Uuid
+  companyId       String                @db.Uuid
+  categoryId      String?               @db.Uuid
+  unitId          String                @db.Uuid
+  sku             String
+  name            String
+  description     String?
+  imageUrl        String?
+  costPrice       Decimal               @default(0) @db.Decimal(18, 2)
+  minStock        Decimal               @default(0) @db.Decimal(18, 3)
+  trackStock      Boolean               @default(true)
+  status          RecordStatus          @default(ACTIVE)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  deletedAt       DateTime?
+  company         Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category        Category?             @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  unit            Unit                  @relation(fields: [unitId], references: [id])
+  barcodes        ProductBarcode[]
+  variants        ProductVariant[]
+  prices          ProductPrice[]
+  stocks          WarehouseStock[]
+  movements       StockMovement[]
+  reservations    StockReservation[]
+  orderItems      OrderItem[]
+  receiptItems    GoodsReceiptItem[]
+  transferItems   StockTransferItem[]
+  countItems      InventoryCountItem[]
+  adjustmentItems StockAdjustmentItem[]
+  returnItems     ReturnItem[]
+  heldCartItems   HeldCartItem[]
+
+  @@unique([companyId, sku])
+  @@index([companyId, name])
+  @@index([companyId, categoryId, status])
+}
+
+model ProductBarcode {
+  id        String   @id @default(uuid()) @db.Uuid
+  companyId String   @db.Uuid
+  productId String   @db.Uuid
+  barcode   String
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, barcode])
+  @@index([productId])
+}
+
+model ProductVariant {
+  id         String       @id @default(uuid()) @db.Uuid
+  companyId  String       @db.Uuid
+  productId  String       @db.Uuid
+  name       String
+  sku        String
+  attributes Json         @default("{}")
+  status     RecordStatus @default(ACTIVE)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  product    Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, sku])
+  @@index([productId, status])
+}
+
+model PriceList {
+  id        String         @id @default(uuid()) @db.Uuid
+  companyId String         @db.Uuid
+  name      String
+  code      String
+  currency  String         @default("UZS")
+  isDefault Boolean        @default(false)
+  status    RecordStatus   @default(ACTIVE)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  company   Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  prices    ProductPrice[]
+  orders    Order[]
+
+  @@unique([companyId, code])
+  @@index([companyId, status])
+}
+
+model ProductPrice {
+  id          String    @id @default(uuid()) @db.Uuid
+  companyId   String    @db.Uuid
+  priceListId String    @db.Uuid
+  productId   String    @db.Uuid
+  price       Decimal   @db.Decimal(18, 2)
+  validFrom   DateTime  @default(now())
+  validTo     DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  priceList   PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([priceListId, productId, validFrom])
+  @@index([companyId, productId, validTo])
+}
+
+model WarehouseStock {
+  id          String    @id @default(uuid()) @db.Uuid
+  companyId   String    @db.Uuid
+  warehouseId String    @db.Uuid
+  productId   String    @db.Uuid
+  onHand      Decimal   @default(0) @db.Decimal(18, 3)
+  reserved    Decimal   @default(0) @db.Decimal(18, 3)
+  version     Int       @default(0)
+  updatedAt   DateTime  @updatedAt
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([warehouseId, productId])
+  @@index([companyId, productId])
+}
+
+model StockMovement {
+  id            String            @id @default(uuid()) @db.Uuid
+  companyId     String            @db.Uuid
+  warehouseId   String            @db.Uuid
+  productId     String            @db.Uuid
+  employeeId    String?           @db.Uuid
+  type          StockMovementType
+  quantity      Decimal           @db.Decimal(18, 3)
+  unitCost      Decimal?          @db.Decimal(18, 2)
+  referenceType String?
+  referenceId   String?
+  reason        String?
+  balanceAfter  Decimal           @db.Decimal(18, 3)
+  createdAt     DateTime          @default(now())
+  warehouse     Warehouse         @relation(fields: [warehouseId], references: [id])
+  product       Product           @relation(fields: [productId], references: [id])
+  employee      Employee?         @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, warehouseId, productId, createdAt])
+  @@index([companyId, referenceType, referenceId])
+}
+
+model StockReservation {
+  id          String            @id @default(uuid()) @db.Uuid
+  companyId   String            @db.Uuid
+  orderId     String            @db.Uuid
+  orderItemId String            @db.Uuid
+  warehouseId String            @db.Uuid
+  productId   String            @db.Uuid
+  quantity    Decimal           @db.Decimal(18, 3)
+  status      ReservationStatus @default(ACTIVE)
+  expiresAt   DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  order       Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItem   OrderItem         @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  warehouse   Warehouse         @relation(fields: [warehouseId], references: [id])
+  product     Product           @relation(fields: [productId], references: [id])
+
+  @@index([companyId, warehouseId, productId, status])
+  @@index([orderId, status])
+}
+
+model StockTransfer {
+  id                String              @id @default(uuid()) @db.Uuid
+  companyId         String              @db.Uuid
+  number            String
+  sourceWarehouseId String              @db.Uuid
+  targetWarehouseId String              @db.Uuid
+  status            DocumentStatus      @default(DRAFT)
+  note              String?
+  approvedById      String?             @db.Uuid
+  approvedAt        DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  sourceWarehouse   Warehouse           @relation("TransferSource", fields: [sourceWarehouseId], references: [id])
+  targetWarehouse   Warehouse           @relation("TransferTarget", fields: [targetWarehouseId], references: [id])
+  items             StockTransferItem[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status, createdAt])
+}
+
+model StockTransferItem {
+  id         String        @id @default(uuid()) @db.Uuid
+  transferId String        @db.Uuid
+  productId  String        @db.Uuid
+  quantity   Decimal       @db.Decimal(18, 3)
+  received   Decimal       @default(0) @db.Decimal(18, 3)
+  transfer   StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  product    Product       @relation(fields: [productId], references: [id])
+
+  @@unique([transferId, productId])
+}
+
+model InventoryCount {
+  id          String               @id @default(uuid()) @db.Uuid
+  companyId   String               @db.Uuid
+  warehouseId String               @db.Uuid
+  number      String
+  status      DocumentStatus       @default(DRAFT)
+  countedAt   DateTime?
+  note        String?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  warehouse   Warehouse            @relation(fields: [warehouseId], references: [id])
+  items       InventoryCountItem[]
+
+  @@unique([companyId, number])
+  @@index([companyId, warehouseId, status])
+}
+
+model InventoryCountItem {
+  id         String         @id @default(uuid()) @db.Uuid
+  countId    String         @db.Uuid
+  productId  String         @db.Uuid
+  expected   Decimal        @db.Decimal(18, 3)
+  counted    Decimal        @db.Decimal(18, 3)
+  difference Decimal        @db.Decimal(18, 3)
+  count      InventoryCount @relation(fields: [countId], references: [id], onDelete: Cascade)
+  product    Product        @relation(fields: [productId], references: [id])
+
+  @@unique([countId, productId])
+}
+
+model StockAdjustment {
+  id          String                @id @default(uuid()) @db.Uuid
+  companyId   String                @db.Uuid
+  warehouseId String                @db.Uuid
+  number      String
+  status      DocumentStatus        @default(DRAFT)
+  reason      String
+  approvedAt  DateTime?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  warehouse   Warehouse             @relation(fields: [warehouseId], references: [id])
+  items       StockAdjustmentItem[]
+
+  @@unique([companyId, number])
+  @@index([companyId, warehouseId, status])
+}
+
+model StockAdjustmentItem {
+  id           String          @id @default(uuid()) @db.Uuid
+  adjustmentId String          @db.Uuid
+  productId    String          @db.Uuid
+  quantity     Decimal         @db.Decimal(18, 3)
+  unitCost     Decimal?        @db.Decimal(18, 2)
+  adjustment   StockAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+  product      Product         @relation(fields: [productId], references: [id])
+
+  @@unique([adjustmentId, productId])
+}
+
+model Customer {
+  id                 String              @id @default(uuid()) @db.Uuid
+  companyId          String              @db.Uuid
+  code               String
+  name               String
+  phone              String?
+  email              String?
+  address            String?
+  latitude           Decimal?            @db.Decimal(10, 7)
+  longitude          Decimal?            @db.Decimal(10, 7)
+  taxId              String?
+  creditLimit        Decimal             @default(0) @db.Decimal(18, 2)
+  balance            Decimal             @default(0) @db.Decimal(18, 2)
+  status             RecordStatus        @default(ACTIVE)
+  metadata           Json                @default("{}")
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  deletedAt          DateTime?
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contacts           Contact[]
+  orders             Order[]
+  invoices           Invoice[]
+  payments           Payment[]
+  debts              Debt[]
+  ledger             LedgerEntry[]
+  deliveries         Delivery[]
+  visits             Visit[]
+  returns            Return[]
+  routeTemplateStops RouteTemplateStop[]
+  routePlanStops     RoutePlanStop[]
+  heldCarts          HeldCart[]
+
+  @@unique([companyId, code])
+  @@index([companyId, name])
+  @@index([companyId, phone])
+}
+
+model Supplier {
+  id            String         @id @default(uuid()) @db.Uuid
+  companyId     String         @db.Uuid
+  code          String
+  name          String
+  phone         String?
+  email         String?
+  address       String?
+  taxId         String?
+  balance       Decimal        @default(0) @db.Decimal(18, 2)
+  status        RecordStatus   @default(ACTIVE)
+  metadata      Json           @default("{}")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  deletedAt     DateTime?
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contacts      Contact[]
+  goodsReceipts GoodsReceipt[]
+  debts         Debt[]
+  ledger        LedgerEntry[]
+  payments      Payment[]
+
+  @@unique([companyId, code])
+  @@index([companyId, name])
+}
+
+model Contact {
+  id         String    @id @default(uuid()) @db.Uuid
+  companyId  String    @db.Uuid
+  customerId String?   @db.Uuid
+  supplierId String?   @db.Uuid
+  name       String
+  position   String?
+  phone      String?
+  email      String?
+  isPrimary  Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  supplier   Supplier? @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, customerId])
+  @@index([companyId, supplierId])
+}
+
+model Order {
+  id                String               @id @default(uuid()) @db.Uuid
+  companyId         String               @db.Uuid
+  branchId          String?              @db.Uuid
+  warehouseId       String               @db.Uuid
+  customerId        String?              @db.Uuid
+  priceListId       String?              @db.Uuid
+  createdById       String               @db.Uuid
+  agentId           String?              @db.Uuid
+  number            String
+  channel           String               @default("SALES")
+  status            OrderStatus          @default(DRAFT)
+  fulfillmentStatus FulfillmentStatus    @default(UNFULFILLED)
+  deliveryStatus    DeliveryStatus       @default(NOT_PLANNED)
+  paymentStatus     InvoiceStatus        @default(DRAFT)
+  currency          String               @default("UZS")
+  subtotal          Decimal              @default(0) @db.Decimal(18, 2)
+  discount          Decimal              @default(0) @db.Decimal(18, 2)
+  tax               Decimal              @default(0) @db.Decimal(18, 2)
+  total             Decimal              @default(0) @db.Decimal(18, 2)
+  note              String?
+  deliveryAddress   String?
+  orderedAt         DateTime             @default(now())
+  confirmedAt       DateTime?
+  completedAt       DateTime?
+  cancelledAt       DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  company           Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch            Branch?              @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  warehouse         Warehouse            @relation(fields: [warehouseId], references: [id])
+  customer          Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  priceList         PriceList?           @relation(fields: [priceListId], references: [id], onDelete: SetNull)
+  createdBy         Employee             @relation("OrderCreator", fields: [createdById], references: [id])
+  agent             Employee?            @relation("OrderAgent", fields: [agentId], references: [id], onDelete: SetNull)
+  items             OrderItem[]
+  reservations      StockReservation[]
+  history           OrderStatusHistory[]
+  pickLists         PickList[]
+  packing           Packing?
+  deliveries        Delivery[]
+  invoices          Invoice[]
+  payments          Payment[]
+  receipt           Receipt?
+  returns           Return[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status, orderedAt])
+  @@index([companyId, customerId, orderedAt])
+}
+
+model OrderItem {
+  id           String             @id @default(uuid()) @db.Uuid
+  orderId      String             @db.Uuid
+  productId    String             @db.Uuid
+  quantity     Decimal            @db.Decimal(18, 3)
+  fulfilledQty Decimal            @default(0) @db.Decimal(18, 3)
+  unitPrice    Decimal            @db.Decimal(18, 2)
+  discount     Decimal            @default(0) @db.Decimal(18, 2)
+  tax          Decimal            @default(0) @db.Decimal(18, 2)
+  total        Decimal            @db.Decimal(18, 2)
+  order        Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product      Product            @relation(fields: [productId], references: [id])
+  reservations StockReservation[]
+  returnItems  ReturnItem[]
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+model OrderStatusHistory {
+  id          String            @id @default(uuid()) @db.Uuid
+  orderId     String            @db.Uuid
+  employeeId  String?           @db.Uuid
+  status      OrderStatus
+  fulfillment FulfillmentStatus
+  delivery    DeliveryStatus
+  note        String?
+  createdAt   DateTime          @default(now())
+  order       Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+}
+
+model PickList {
+  id        String         @id @default(uuid()) @db.Uuid
+  companyId String         @db.Uuid
+  orderId   String         @db.Uuid
+  number    String
+  status    DocumentStatus @default(DRAFT)
+  progress  Int            @default(0)
+  startedAt DateTime?
+  pickedAt  DateTime?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  order     Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+}
+
+model Packing {
+  id           String         @id @default(uuid()) @db.Uuid
+  companyId    String         @db.Uuid
+  orderId      String         @unique @db.Uuid
+  status       DocumentStatus @default(DRAFT)
+  packageCount Int            @default(1)
+  weight       Decimal?       @db.Decimal(18, 3)
+  packedAt     DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  order        Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model GoodsReceipt {
+  id          String             @id @default(uuid()) @db.Uuid
+  companyId   String             @db.Uuid
+  supplierId  String             @db.Uuid
+  warehouseId String             @db.Uuid
+  number      String
+  status      DocumentStatus     @default(DRAFT)
+  total       Decimal            @default(0) @db.Decimal(18, 2)
+  note        String?
+  receivedAt  DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  supplier    Supplier           @relation(fields: [supplierId], references: [id])
+  warehouse   Warehouse          @relation(fields: [warehouseId], references: [id])
+  items       GoodsReceiptItem[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status, createdAt])
+}
+
+model GoodsReceiptItem {
+  id        String       @id @default(uuid()) @db.Uuid
+  receiptId String       @db.Uuid
+  productId String       @db.Uuid
+  quantity  Decimal      @db.Decimal(18, 3)
+  unitCost  Decimal      @db.Decimal(18, 2)
+  total     Decimal      @db.Decimal(18, 2)
+  receipt   GoodsReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  product   Product      @relation(fields: [productId], references: [id])
+
+  @@unique([receiptId, productId])
+}
+
+model DeliveryTrip {
+  id               String         @id @default(uuid()) @db.Uuid
+  companyId        String         @db.Uuid
+  warehouseId      String         @db.Uuid
+  driverEmployeeId String?        @db.Uuid
+  number           String
+  vehicle          String?
+  status           DocumentStatus @default(DRAFT)
+  plannedKm        Decimal?       @db.Decimal(10, 2)
+  plannedMinutes   Int?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  deliveries       Delivery[]
+  warehouse        Warehouse      @relation(fields: [warehouseId], references: [id])
+  driver           Employee?      @relation("TripDriver", fields: [driverEmployeeId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+}
+
+model Delivery {
+  id            String         @id @default(uuid()) @db.Uuid
+  companyId     String         @db.Uuid
+  tripId        String?        @db.Uuid
+  orderId       String         @db.Uuid
+  customerId    String?        @db.Uuid
+  stopOrder     Int?
+  status        DeliveryStatus @default(PLANNED)
+  recipientName String?
+  failureReason String?
+  proof         Json           @default("{}")
+  arrivedAt     DateTime?
+  deliveredAt   DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  trip          DeliveryTrip?  @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  order         Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer      Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status, createdAt])
+  @@index([tripId, stopOrder])
+}
+
+model Invoice {
+  id          String              @id @default(uuid()) @db.Uuid
+  companyId   String              @db.Uuid
+  orderId     String?             @db.Uuid
+  customerId  String?             @db.Uuid
+  number      String
+  status      InvoiceStatus       @default(DRAFT)
+  currency    String              @default("UZS")
+  subtotal    Decimal             @default(0) @db.Decimal(18, 2)
+  tax         Decimal             @default(0) @db.Decimal(18, 2)
+  discount    Decimal             @default(0) @db.Decimal(18, 2)
+  total       Decimal             @default(0) @db.Decimal(18, 2)
+  paid        Decimal             @default(0) @db.Decimal(18, 2)
+  dueAt       DateTime?
+  issuedAt    DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  company     Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  order       Order?              @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  customer    Customer?           @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items       InvoiceItem[]
+  allocations PaymentAllocation[]
+  debts       Debt[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status, createdAt])
+  @@index([companyId, customerId, dueAt])
+}
+
+model InvoiceItem {
+  id          String  @id @default(uuid()) @db.Uuid
+  invoiceId   String  @db.Uuid
+  description String
+  productId   String? @db.Uuid
+  quantity    Decimal @db.Decimal(18, 3)
+  unitPrice   Decimal @db.Decimal(18, 2)
+  tax         Decimal @default(0) @db.Decimal(18, 2)
+  total       Decimal @db.Decimal(18, 2)
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+model Payment {
+  id              String                  @id @default(uuid()) @db.Uuid
+  companyId       String                  @db.Uuid
+  customerId      String?                 @db.Uuid
+  supplierId      String?                 @db.Uuid
+  orderId         String?                 @db.Uuid
+  employeeId      String?                 @db.Uuid
+  shiftId         String?                 @db.Uuid
+  number          String
+  method          PaymentMethod
+  status          PaymentStatus           @default(PENDING)
+  amount          Decimal                 @db.Decimal(18, 2)
+  currency        String                  @default("UZS")
+  externalRef     String?
+  note            String?
+  paidAt          DateTime?
+  confirmedAt     DateTime?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+  company         Company                 @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  customer        Customer?               @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  supplier        Supplier?               @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  order           Order?                  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  employee        Employee?               @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  shift           Shift?                  @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  allocations     PaymentAllocation[]
+  debtAllocations DebtPaymentAllocation[]
+  receipt         Receipt?
+
+  @@unique([companyId, number])
+  @@index([companyId, status, createdAt])
+  @@index([companyId, customerId, createdAt])
+  @@index([companyId, supplierId, createdAt])
+}
+
+model PaymentAllocation {
+  id        String   @id @default(uuid()) @db.Uuid
+  paymentId String   @db.Uuid
+  invoiceId String   @db.Uuid
+  amount    Decimal  @db.Decimal(18, 2)
+  createdAt DateTime @default(now())
+  payment   Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentId, invoiceId])
+}
+
+model Receipt {
+  id        String    @id @default(uuid()) @db.Uuid
+  companyId String    @db.Uuid
+  orderId   String?   @unique @db.Uuid
+  paymentId String?   @unique @db.Uuid
+  number    String
+  fiscalId  String?
+  payload   Json      @default("{}")
+  printedAt DateTime?
+  createdAt DateTime  @default(now())
+  order     Order?    @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  payment   Payment?  @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, number])
+}
+
+model Debt {
+  id          String                  @id @default(uuid()) @db.Uuid
+  companyId   String                  @db.Uuid
+  customerId  String?                 @db.Uuid
+  supplierId  String?                 @db.Uuid
+  invoiceId   String?                 @db.Uuid
+  original    Decimal                 @db.Decimal(18, 2)
+  outstanding Decimal                 @db.Decimal(18, 2)
+  dueAt       DateTime?
+  settledAt   DateTime?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+  customer    Customer?               @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  supplier    Supplier?               @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  invoice     Invoice?                @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  allocations DebtPaymentAllocation[]
+
+  @@index([companyId, customerId, outstanding])
+  @@index([companyId, supplierId, outstanding])
+  @@index([companyId, dueAt])
+}
+
+model DebtPaymentAllocation {
+  id        String   @id @default(uuid()) @db.Uuid
+  paymentId String   @db.Uuid
+  debtId    String   @db.Uuid
+  amount    Decimal  @db.Decimal(18, 2)
+  createdAt DateTime @default(now())
+  payment   Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  debt      Debt     @relation(fields: [debtId], references: [id], onDelete: Cascade)
+
+  @@unique([paymentId, debtId])
+}
+
+model Cashbox {
+  id           String            @id @default(uuid()) @db.Uuid
+  companyId    String            @db.Uuid
+  branchId     String?           @db.Uuid
+  warehouseId  String?           @db.Uuid
+  name         String
+  code         String
+  balance      Decimal           @default(0) @db.Decimal(18, 2)
+  status       RecordStatus      @default(ACTIVE)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  company      Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  branch       Branch?           @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  warehouse    Warehouse?        @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  shifts       Shift[]
+  transactions CashTransaction[]
+
+  @@unique([companyId, code])
+  @@index([companyId, status])
+}
+
+model Shift {
+  id             String            @id @default(uuid()) @db.Uuid
+  companyId      String            @db.Uuid
+  cashboxId      String            @db.Uuid
+  employeeId     String            @db.Uuid
+  status         ShiftStatus       @default(OPEN)
+  openingBalance Decimal           @db.Decimal(18, 2)
+  expectedCash   Decimal           @default(0) @db.Decimal(18, 2)
+  closingBalance Decimal?          @db.Decimal(18, 2)
+  difference     Decimal?          @db.Decimal(18, 2)
+  openedAt       DateTime          @default(now())
+  closedAt       DateTime?
+  note           String?
+  cashbox        Cashbox           @relation(fields: [cashboxId], references: [id])
+  employee       Employee          @relation(fields: [employeeId], references: [id])
+  payments       Payment[]
+  transactions   CashTransaction[]
+
+  @@index([companyId, employeeId, status])
+  @@index([companyId, cashboxId, openedAt])
+}
+
+model CashTransaction {
+  id          String              @id @default(uuid()) @db.Uuid
+  companyId   String              @db.Uuid
+  cashboxId   String              @db.Uuid
+  shiftId     String?             @db.Uuid
+  type        CashTransactionType
+  amount      Decimal             @db.Decimal(18, 2)
+  reference   String?
+  description String?
+  createdAt   DateTime            @default(now())
+  cashbox     Cashbox             @relation(fields: [cashboxId], references: [id])
+  shift       Shift?              @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, cashboxId, createdAt])
+}
+
+model LedgerEntry {
+  id            String     @id @default(uuid()) @db.Uuid
+  companyId     String     @db.Uuid
+  customerId    String?    @db.Uuid
+  supplierId    String?    @db.Uuid
+  side          LedgerSide
+  account       String
+  amount        Decimal    @db.Decimal(18, 2)
+  currency      String     @default("UZS")
+  referenceType String?
+  referenceId   String?
+  description   String?
+  occurredAt    DateTime   @default(now())
+  createdAt     DateTime   @default(now())
+  customer      Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  supplier      Supplier?  @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, account, occurredAt])
+  @@index([companyId, customerId, occurredAt])
+  @@index([companyId, supplierId, occurredAt])
+}
+
+model Return {
+  id         String       @id @default(uuid()) @db.Uuid
+  companyId  String       @db.Uuid
+  orderId    String?      @db.Uuid
+  customerId String?      @db.Uuid
+  number     String
+  status     ReturnStatus @default(DRAFT)
+  reason     String?
+  total      Decimal      @default(0) @db.Decimal(18, 2)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+  order      Order?       @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  customer   Customer?    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items      ReturnItem[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status, createdAt])
+}
+
+model ReturnItem {
+  id          String     @id @default(uuid()) @db.Uuid
+  returnId    String     @db.Uuid
+  orderItemId String?    @db.Uuid
+  productId   String     @db.Uuid
+  quantity    Decimal    @db.Decimal(18, 3)
+  unitPrice   Decimal    @db.Decimal(18, 2)
+  total       Decimal    @db.Decimal(18, 2)
+  condition   String?
+  return      Return     @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  orderItem   OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  product     Product    @relation(fields: [productId], references: [id])
+
+  @@index([returnId])
+}
+
+model Territory {
+  id             String          @id @default(uuid()) @db.Uuid
+  companyId      String          @db.Uuid
+  name           String
+  code           String
+  geometry       Json            @default("{}")
+  status         RecordStatus    @default(ACTIVE)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  routeTemplates RouteTemplate[]
+
+  @@unique([companyId, code])
+}
+
+model RouteTemplate {
+  id          String              @id @default(uuid()) @db.Uuid
+  companyId   String              @db.Uuid
+  territoryId String?             @db.Uuid
+  agentId     String?             @db.Uuid
+  name        String
+  dayOfWeek   Int?
+  status      RecordStatus        @default(ACTIVE)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  territory   Territory?          @relation(fields: [territoryId], references: [id], onDelete: SetNull)
+  agent       Employee?           @relation("TemplateAgent", fields: [agentId], references: [id], onDelete: SetNull)
+  stops       RouteTemplateStop[]
+  plans       RoutePlan[]
+
+  @@index([companyId, status])
+}
+
+model RouteTemplateStop {
+  id         String        @id @default(uuid()) @db.Uuid
+  templateId String        @db.Uuid
+  customerId String        @db.Uuid
+  stopOrder  Int
+  template   RouteTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  customer   Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, customerId])
+  @@unique([templateId, stopOrder])
+}
+
+model RoutePlan {
+  id         String          @id @default(uuid()) @db.Uuid
+  companyId  String          @db.Uuid
+  templateId String?         @db.Uuid
+  agentId    String?         @db.Uuid
+  name       String
+  planDate   DateTime
+  status     DocumentStatus  @default(DRAFT)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  template   RouteTemplate?  @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  agent      Employee?       @relation("PlanAgent", fields: [agentId], references: [id], onDelete: SetNull)
+  stops      RoutePlanStop[]
+
+  @@index([companyId, planDate, status])
+}
+
+model RoutePlanStop {
+  id          String      @id @default(uuid()) @db.Uuid
+  routePlanId String      @db.Uuid
+  customerId  String      @db.Uuid
+  stopOrder   Int
+  status      VisitStatus @default(PLANNED)
+  visitedAt   DateTime?
+  routePlan   RoutePlan   @relation(fields: [routePlanId], references: [id], onDelete: Cascade)
+  customer    Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([routePlanId, customerId])
+  @@unique([routePlanId, stopOrder])
+}
+
+model Visit {
+  id         String      @id @default(uuid()) @db.Uuid
+  companyId  String      @db.Uuid
+  employeeId String      @db.Uuid
+  customerId String      @db.Uuid
+  status     VisitStatus @default(PLANNED)
+  checkInAt  DateTime?
+  checkOutAt DateTime?
+  latitude   Decimal?    @db.Decimal(10, 7)
+  longitude  Decimal?    @db.Decimal(10, 7)
+  note       String?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  employee   Employee    @relation(fields: [employeeId], references: [id])
+  customer   Customer    @relation(fields: [customerId], references: [id])
+
+  @@index([companyId, employeeId, createdAt])
+  @@index([companyId, customerId, createdAt])
+}
+
+model EmployeeKpi {
+  id         String   @id @default(uuid()) @db.Uuid
+  companyId  String   @db.Uuid
+  employeeId String   @db.Uuid
+  month      String
+  baseSalary Decimal  @default(0) @db.Decimal(18, 2)
+  target     Decimal  @default(0) @db.Decimal(18, 2)
+  actual     Decimal  @default(0) @db.Decimal(18, 2)
+  kpiBonus   Decimal  @default(0) @db.Decimal(18, 2)
+  salesBonus Decimal  @default(0) @db.Decimal(18, 2)
+  penalties  Decimal  @default(0) @db.Decimal(18, 2)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, month])
+  @@index([companyId, month])
+}
+
+model SalaryPayment {
+  id          String         @id @default(uuid()) @db.Uuid
+  companyId   String         @db.Uuid
+  employeeId  String         @db.Uuid
+  month       String
+  baseSalary  Decimal        @default(0) @db.Decimal(18, 2)
+  bonus       Decimal        @default(0) @db.Decimal(18, 2)
+  adjustments Decimal        @default(0) @db.Decimal(18, 2)
+  penalties   Decimal        @default(0) @db.Decimal(18, 2)
+  total       Decimal        @db.Decimal(18, 2)
+  status      DocumentStatus @default(DRAFT)
+  paidAt      DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  employee    Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, month])
+  @@index([companyId, status, month])
+}
+
+model Notification {
+  id         String             @id @default(uuid()) @db.Uuid
+  companyId  String             @db.Uuid
+  employeeId String?            @db.Uuid
+  type       NotificationType   @default(INFO)
+  status     NotificationStatus @default(UNREAD)
+  title      String
+  message    String
+  module     String?
+  actionUrl  String?
+  metadata   Json               @default("{}")
+  readAt     DateTime?
+  createdAt  DateTime           @default(now())
+  company    Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee   Employee?          @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  reads      NotificationRead[]
+
+  @@index([companyId, employeeId, status, createdAt])
+}
+
+model NotificationRead {
+  notificationId String       @db.Uuid
+  employeeId     String       @db.Uuid
+  readAt         DateTime     @default(now())
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  employee       Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@id([notificationId, employeeId])
+  @@index([employeeId, readAt])
+}
+
+model AuditLog {
+  id         String    @id @default(uuid()) @db.Uuid
+  companyId  String?   @db.Uuid
+  employeeId String?   @db.Uuid
+  action     String
+  entity     String
+  entityId   String?
+  before     Json?
+  after      Json?
+  metadata   Json      @default("{}")
+  ipAddress  String?
+  userAgent  String?
+  requestId  String?
+  createdAt  DateTime  @default(now())
+  company    Company?  @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  employee   Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, entity, entityId, createdAt])
+  @@index([employeeId, createdAt])
+}
+
+model Settings {
+  id        String   @id @default(uuid()) @db.Uuid
+  companyId String   @unique @db.Uuid
+  data      Json     @default("{}")
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.Uuid
+  companyId        String    @db.Uuid
+  employeeId       String    @db.Uuid
+  refreshTokenHash String
+  deviceId         String
+  deviceName       String?
+  userAgent        String?
+  ipAddress        String?
+  expiresAt        DateTime
+  lastUsedAt       DateTime  @default(now())
+  revokedAt        DateTime?
+  revokeReason     String?
+  replacedById     String?   @db.Uuid
+  createdAt        DateTime  @default(now())
+  company          Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee         Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, revokedAt, expiresAt])
+  @@index([companyId, deviceId])
+}
+
+model PasswordResetToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  employeeId String    @db.Uuid
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
+  employee   Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, expiresAt])
+}
+
+model Upload {
+  id           String       @id @default(uuid()) @db.Uuid
+  companyId    String       @db.Uuid
+  uploadedById String?      @db.Uuid
+  purpose      String
+  originalName String
+  storageKey   String       @unique
+  mimeType     String
+  size         Int
+  width        Int?
+  height       Int?
+  checksum     String?
+  status       UploadStatus @default(PENDING)
+  metadata     Json         @default("{}")
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  deletedAt    DateTime?
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, purpose, status])
+}
+
+model IdempotencyKey {
+  id           String    @id @default(uuid()) @db.Uuid
+  companyId    String    @db.Uuid
+  key          String
+  method       String
+  path         String
+  requestHash  String
+  responseCode Int?
+  responseBody Json?
+  lockedUntil  DateTime?
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([companyId, key])
+  @@index([expiresAt])
+}
+
+model DocumentSequence {
+  id        String   @id @default(uuid()) @db.Uuid
+  companyId String   @db.Uuid
+  type      String
+  prefix    String
+  year      Int
+  value     Int      @default(0)
+  updatedAt DateTime @updatedAt
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, type, year])
+}
+
+model EmployeeType {
+  id        String       @id @default(uuid()) @db.Uuid
+  companyId String       @db.Uuid
+  code      String
+  name      String
+  isSystem  Boolean      @default(false)
+  status    RecordStatus @default(ACTIVE)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  company   Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employees Employee[]
+
+  @@unique([companyId, code])
+}
+
+model PaymentMethodConfig {
+  id             String        @id @default(uuid()) @db.Uuid
+  companyId      String        @db.Uuid
+  code           String
+  name           String
+  method         PaymentMethod
+  shortcut       String?
+  commissionRate Decimal       @default(0) @db.Decimal(8, 4)
+  metadata       Json          @default("{}")
+  status         RecordStatus  @default(ACTIVE)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  company        Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, code])
+}
+
+model HeldCart {
+  id         String         @id @default(uuid()) @db.Uuid
+  companyId  String         @db.Uuid
+  employeeId String         @db.Uuid
+  customerId String?        @db.Uuid
+  name       String?
+  note       String?
+  expiresAt  DateTime?
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  company    Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  employee   Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  customer   Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items      HeldCartItem[]
+
+  @@index([companyId, employeeId, createdAt])
+}
+
+model HeldCartItem {
+  id         String   @id @default(uuid()) @db.Uuid
+  heldCartId String   @db.Uuid
+  productId  String   @db.Uuid
+  quantity   Decimal  @db.Decimal(18, 3)
+  unitPrice  Decimal  @db.Decimal(18, 2)
+  discount   Decimal  @default(0) @db.Decimal(18, 2)
+  heldCart   HeldCart @relation(fields: [heldCartId], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [productId], references: [id])
+
+  @@unique([heldCartId, productId])
+}
+
+model Approval {
+  id            String         @id @default(uuid()) @db.Uuid
+  companyId     String         @db.Uuid
+  requestedById String         @db.Uuid
+  reviewedById  String?        @db.Uuid
+  entity        String
+  entityId      String
+  action        String
+  status        DocumentStatus @default(PENDING_APPROVAL)
+  reason        String?
+  payload       Json           @default("{}")
+  reviewedAt    DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  requestedBy   Employee       @relation("ApprovalRequester", fields: [requestedById], references: [id])
+  reviewedBy    Employee?      @relation("ApprovalReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([companyId, status, createdAt])
+  @@index([companyId, entity, entityId])
+}
+
+model CurrencyRate {
+  id          String   @id @default(uuid()) @db.Uuid
+  companyId   String   @db.Uuid
+  base        String
+  quote       String
+  rate        Decimal  @db.Decimal(18, 6)
+  source      String?
+  effectiveAt DateTime
+  createdAt   DateTime @default(now())
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, base, quote, effectiveAt])
+  @@index([companyId, effectiveAt])
+}

@@ -1,0 +1,6 @@
+{
+  "watch": ["src", "prisma", "docs/openapi.yaml"],
+  "ext": "js,json,yaml,prisma,ts",
+  "ignore": ["src/generated/**", "coverage/**"],
+  "delay": 150
+}

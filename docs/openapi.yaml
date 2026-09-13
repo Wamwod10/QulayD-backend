@@ -1,0 +1,644 @@
+openapi: 3.1.0
+info:
+  title: Qulay API
+  version: 1.0.0
+  description: |
+    REST API for the Qulay Distribution Business Control System.
+    Canonical multi-tenant REST API for authentication, catalog, inventory,
+    orders, POS, finance, delivery, reporting and administration.
+servers:
+  - url: http://localhost:5000
+    description: Local development
+tags:
+  - name: System
+    description: Service metadata and health checks
+  - name: Auth
+  - name: Access
+  - name: Catalog
+  - name: Inventory
+  - name: Partners
+  - name: Orders
+  - name: POS
+  - name: Finance
+  - name: Delivery
+  - name: Reports
+  - name: Administration
+security:
+  - BearerAuth: []
+paths:
+  /api/v1:
+    get:
+      security: []
+      tags: [System]
+      operationId: getApiMetadata
+      summary: Get API metadata
+      responses:
+        "200":
+          description: API metadata
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+  /api/v1/health:
+    get:
+      security: []
+      tags: [System]
+      operationId: getLiveness
+      summary: Process liveness check
+      description: Does not require PostgreSQL to be available.
+      responses:
+        "200":
+          description: Process is alive
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Liveness"
+  /api/v1/ready:
+    get:
+      security: []
+      tags: [System]
+      operationId: getReadiness
+      summary: Dependency readiness check
+      responses:
+        "200":
+          description: API and PostgreSQL are ready
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "503":
+          description: At least one required dependency is unavailable
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/auth/register-owner:
+    post:
+      security: []
+      tags: [Auth]
+      summary: Register a company and its owner
+      operationId: registerOwner
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterOwnerInput" }
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/auth/login:
+    post:
+      security: []
+      tags: [Auth]
+      summary: Login with login, phone or email and password
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginInput" }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/auth/pin:
+    post:
+      security: []
+      tags: [Auth]
+      summary: Login with employee identifier and PIN
+      operationId: pinLogin
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/auth/refresh:
+    post:
+      security: []
+      tags: [Auth]
+      summary: Rotate refresh token and issue a new access token
+      operationId: refreshSession
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user, roles, permissions and enabled modules
+      operationId: getCurrentUser
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/employees:
+    get:
+      tags: [Access]
+      summary: List employees
+      operationId: listEmployees
+      parameters: [{ $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Search" }]
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Access]
+      summary: Create employee with roles, modules, password and optional PIN
+      operationId: createEmployee
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/access/roles:
+    get:
+      tags: [Access]
+      summary: List system and company roles
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Access]
+      summary: Create custom role
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/catalog/products:
+    get:
+      tags: [Catalog]
+      summary: Search and list products with prices and stock
+      parameters: [{ $ref: "#/components/parameters/Page" }, { $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Search" }]
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Catalog]
+      summary: Create a product with five-digit SKU, explicit barcodes and prices
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/catalog/products/{id}:
+    parameters: [{ $ref: "#/components/parameters/Id" }]
+    get:
+      tags: [Catalog]
+      summary: Product quick view
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    patch:
+      tags: [Catalog]
+      summary: Update product
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    delete:
+      tags: [Catalog]
+      summary: Archive product
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/customers:
+    get:
+      tags: [Partners]
+      summary: List customers
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Partners]
+      summary: Create customer
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/suppliers:
+    get:
+      tags: [Partners]
+      summary: List suppliers
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Partners]
+      summary: Create supplier
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/inventory/stocks:
+    get:
+      tags: [Inventory]
+      summary: List on-hand, reserved and available inventory
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/inventory/movements:
+    get:
+      tags: [Inventory]
+      summary: Immutable stock movement history
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/inventory/transfers:
+    get:
+      tags: [Inventory]
+      summary: List stock transfers
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Inventory]
+      summary: Create stock transfer
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/inventory/adjustments:
+    get:
+      tags: [Inventory]
+      summary: List stock adjustments
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Inventory]
+      summary: Create approval-required stock adjustment
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/inventory/counts:
+    get:
+      tags: [Inventory]
+      summary: List inventory counts
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Inventory]
+      summary: Start inventory count
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/inventory/goods-receipts:
+    get:
+      tags: [Inventory]
+      summary: List supplier goods receipts
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Inventory]
+      summary: Create goods receipt
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/orders:
+    get:
+      tags: [Orders]
+      summary: List and filter orders
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Orders]
+      summary: Create order
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/orders/{id}:
+    get:
+      tags: [Orders]
+      summary: Order quick view including history, reservations, fulfillment, delivery, invoice and payment
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    patch:
+      tags: [Orders]
+      summary: Update a draft order
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/orders/{id}/confirm:
+    post:
+      tags: [Orders]
+      summary: Confirm order and reserve inventory atomically
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/pos/sales:
+    post:
+      tags: [POS]
+      summary: Complete atomic POS sale, stock issue, invoice, payment, receipt and ledger posting
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/pos/shifts/open:
+    post:
+      tags: [POS]
+      summary: Open cashier shift
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/payments:
+    get:
+      tags: [Finance]
+      summary: List customer and supplier payments
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Finance]
+      summary: Create payment with invoice or debt allocations
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/invoices:
+    get:
+      tags: [Finance]
+      summary: List invoices
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Finance]
+      summary: Create manual invoice
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/finance/debts:
+    get:
+      tags: [Finance]
+      summary: Customer receivables and supplier payables
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/delivery/trips:
+    get:
+      tags: [Delivery]
+      summary: List delivery trips
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Delivery]
+      summary: Create trip from fulfilled orders
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/returns:
+    get:
+      tags: [Orders]
+      summary: List returns
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Orders]
+      summary: Create return request from completed order
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/reports/sales:
+    get:
+      tags: [Reports]
+      summary: Sales analytics
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/reports/inventory:
+    get:
+      tags: [Reports]
+      summary: Inventory analytics
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/reports/finance:
+    get:
+      tags: [Reports]
+      summary: Finance analytics
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/search:
+    get:
+      tags: [Administration]
+      summary: Permission-aware global search
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2 }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/uploads/images:
+    post:
+      tags: [Administration]
+      summary: Upload and optimize JPG, PNG or WEBP image
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image, purpose]
+              properties:
+                image: { type: string, format: binary }
+                purpose: { type: string }
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/auth/forgot-password:
+    post:
+      security: []
+      tags: [Auth]
+      summary: Request password reset delivery
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /api/v1/auth/reset-password:
+    post:
+      security: []
+      tags: [Auth]
+      summary: Reset password using a one-time token
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /api/v1/auth/change-password:
+    post:
+      tags: [Auth]
+      summary: Change current password and revoke all sessions
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke current device session
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /api/v1/auth/sessions:
+    get:
+      tags: [Auth]
+      summary: List current employee device sessions
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /api/v1/auth/sessions/{id}:
+    delete:
+      tags: [Auth]
+      summary: Revoke one owned device session
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /api/v1/access/permissions:
+    get:
+      tags: [Access]
+      summary: List permission catalog grouped by module
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /api/v1/employees/{id}:
+    get:
+      tags: [Access]
+      summary: Get employee access profile
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+    patch:
+      tags: [Access]
+      summary: Update employee roles, modules and identity
+      parameters: [{ $ref: "#/components/parameters/Id" }]
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /api/v1/branches:
+    get: { tags: [Administration], summary: List branches, responses: { "200": { $ref: "#/components/responses/Success" } } }
+    post: { tags: [Administration], summary: Create branch, responses: { "201": { $ref: "#/components/responses/Success" } } }
+  /api/v1/catalog/categories:
+    get: { tags: [Catalog], summary: List categories, responses: { "200": { $ref: "#/components/responses/Success" } } }
+    post: { tags: [Catalog], summary: Create category, responses: { "201": { $ref: "#/components/responses/Success" } } }
+  /api/v1/catalog/units:
+    get: { tags: [Catalog], summary: List product units, responses: { "200": { $ref: "#/components/responses/Success" } } }
+    post: { tags: [Catalog], summary: Create product unit, responses: { "201": { $ref: "#/components/responses/Success" } } }
+  /api/v1/inventory/warehouses:
+    get: { tags: [Inventory], summary: List warehouses, responses: { "200": { $ref: "#/components/responses/Success" } } }
+    post: { tags: [Inventory], summary: Create warehouse, responses: { "201": { $ref: "#/components/responses/Success" } } }
+  /api/v1/inventory/transfers/{id}/approve:
+    post: { tags: [Inventory], summary: Approve stock transfer, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/inventory/transfers/{id}/complete:
+    post: { tags: [Inventory], summary: Complete transfer atomically, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/inventory/adjustments/{id}/approve:
+    post: { tags: [Inventory], summary: Approve and post adjustment, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/inventory/counts/{id}/complete:
+    post: { tags: [Inventory], summary: Complete count and post variances, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/inventory/goods-receipts/{id}/confirm:
+    post: { tags: [Inventory], summary: Receive goods and post stock and payable, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/orders/{id}/picking/start:
+    post: { tags: [Orders], summary: Start picking, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/orders/{id}/picking/complete:
+    post: { tags: [Orders], summary: Complete picking, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/orders/{id}/packing/complete:
+    post: { tags: [Orders], summary: Complete packing, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/orders/{id}/ready:
+    post: { tags: [Orders], summary: Mark order ready for delivery, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/orders/{id}/complete:
+    post: { tags: [Orders], summary: Complete order and consume reservation, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/orders/{id}/cancel:
+    post: { tags: [Orders], summary: Cancel order and release reservation, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/pos/shifts:
+    get: { tags: [POS], summary: List shift history, responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/pos/shifts/current:
+    get: { tags: [POS], summary: Get current cashier shift, responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/pos/shifts/{id}/close:
+    post: { tags: [POS], summary: Close cashier shift, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/pos/held-carts:
+    get: { tags: [POS], summary: List held carts, responses: { "200": { $ref: "#/components/responses/Success" } } }
+    post: { tags: [POS], summary: Hold a cart, responses: { "201": { $ref: "#/components/responses/Success" } } }
+  /api/v1/payments/{id}/confirm:
+    post: { tags: [Finance], summary: Confirm payment and post allocations and ledger, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/invoices/{id}/issue:
+    post: { tags: [Finance], summary: Issue invoice and create receivable, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/finance:
+    get: { tags: [Finance], summary: List ledger entries, responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/delivery/trips/{id}/start:
+    post: { tags: [Delivery], summary: Start delivery trip, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/delivery/deliveries/{id}/complete:
+    post: { tags: [Delivery], summary: Complete delivery and consume reserved stock, parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/routes/templates:
+    get: { tags: [Delivery], summary: List route templates, responses: { "200": { $ref: "#/components/responses/Success" } } }
+    post: { tags: [Delivery], summary: Create route template, responses: { "201": { $ref: "#/components/responses/Success" } } }
+  /api/v1/routes/plans:
+    get: { tags: [Delivery], summary: List route plans, responses: { "200": { $ref: "#/components/responses/Success" } } }
+    post: { tags: [Delivery], summary: Create route plan, responses: { "201": { $ref: "#/components/responses/Success" } } }
+  /api/v1/notifications:
+    get: { tags: [Administration], summary: List permission-aware personal and broadcast notifications, responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/audit:
+    get: { tags: [Administration], summary: List immutable audit history, responses: { "200": { $ref: "#/components/responses/Success" } } }
+  /api/v1/settings:
+    get: { tags: [Administration], summary: Get company settings, responses: { "200": { $ref: "#/components/responses/Success" } } }
+    put: { tags: [Administration], summary: Update settings with optimistic concurrency, responses: { "200": { $ref: "#/components/responses/Success" } } }
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Search:
+      name: search
+      in: query
+      schema: { type: string, maxLength: 200 }
+  responses:
+    Success:
+      description: Successful operation
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/SuccessResponse" }
+    Error:
+      description: Request failed
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+  headers:
+    RequestId:
+      description: Correlation identifier for support and audit logs
+      schema:
+        type: string
+  schemas:
+    RegisterOwnerInput:
+      type: object
+      required: [companyName, name, password, deviceId]
+      properties:
+        companyName: { type: string, minLength: 2 }
+        name: { type: string, minLength: 2 }
+        login: { type: string }
+        phone: { type: string }
+        email: { type: string, format: email }
+        password: { type: string, format: password, minLength: 8 }
+        deviceId: { type: string }
+        deviceName: { type: string }
+    LoginInput:
+      type: object
+      required: [identifier, password, deviceId]
+      properties:
+        identifier: { type: string }
+        password: { type: string, format: password }
+        deviceId: { type: string }
+        deviceName: { type: string }
+    SuccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data: {}
+        message:
+          type: string
+        meta:
+          type: object
+          additionalProperties: true
+        requestId:
+          type: string
+    ErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details: {}
+        requestId:
+          type: string
+    Liveness:
+      type: object
+      required: [status, service, version, environment, uptimeSeconds, timestamp]
+      properties:
+        status:
+          type: string
+          const: ok
+        service:
+          type: string
+        version:
+          type: string
+        environment:
+          type: string
+          enum: [development, test, production]
+        uptimeSeconds:
+          type: integer
+          minimum: 0
+        timestamp:
+          type: string
+          format: date-time
