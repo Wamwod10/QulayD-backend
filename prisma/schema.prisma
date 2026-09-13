@@ -318,6 +318,7 @@ model Employee {
   heldCarts          HeldCart[]
   approvalsRequested Approval[]           @relation("ApprovalRequester")
   approvalsReviewed  Approval[]           @relation("ApprovalReviewer")
+  assignedPickLists  PickList[]
 
   @@index([companyId, status])
 }
@@ -851,9 +852,12 @@ model PickList {
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
   order     Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  pickerEmployeeId String? @db.Uuid
+  pickerEmployee   Employee? @relation(fields: [pickerEmployeeId], references: [id], onDelete: SetNull)
 
   @@unique([companyId, number])
   @@index([companyId, status])
+  @@index([pickerEmployeeId])
 }
 
 model Packing {

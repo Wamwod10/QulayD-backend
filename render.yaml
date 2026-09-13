@@ -16,7 +16,9 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: CORS_ORIGIN
-        sync: false
+        value: https://qulay-d.vercel.app
+      - key: FRONTEND_RESET_URL
+        value: https://qulay-d.vercel.app/reset-password
       - key: JWT_ACCESS_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET

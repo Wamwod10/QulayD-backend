@@ -4,7 +4,12 @@ import { REFRESH_COOKIE } from "./auth.constants.js";
 
 const context = (request) => ({ ipAddress: request.ip, userAgent: request.get("user-agent") });
 const cookieOptions = {
-  httpOnly: true, secure: env.NODE_ENV === "production", sameSite: "strict",
+  httpOnly: true,
+  secure: env.NODE_ENV === "production",
+  // The Vercel frontend and Render API are different sites in production.
+  // Development remains HTTP-friendly while production cookies are explicitly
+  // eligible for credentialed cross-site requests.
+  sameSite: env.NODE_ENV === "production" ? "none" : "lax",
   maxAge: env.JWT_REFRESH_TTL_DAYS * 86_400_000, path: `${env.API_PREFIX}/auth`,
 };
 const sessionResponse = (response, result, statusCode = 200) => {
