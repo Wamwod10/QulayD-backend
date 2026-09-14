@@ -19,6 +19,7 @@ export function createUserRouter({ prisma }) {
   router.get("/:id", requirePermission("settings.read"), validate({ params }), asyncHandler(c.find));
   router.post("/", requireRole("OWNER", "ADMIN"), validate({ body: employeeCreateSchema }), asyncHandler(c.create));
   router.patch("/:id", requireRole("OWNER", "ADMIN"), validate({ params, body: employeeUpdateSchema }), asyncHandler(c.update));
+  router.delete("/:id", requireRole("OWNER", "ADMIN"), validate({ params }), asyncHandler(c.remove));
   router.post("/:id/reset-password", requireRole("OWNER", "ADMIN"), validate({ params, body: employeePasswordSchema }), asyncHandler(c.resetPassword));
   return router;
 }

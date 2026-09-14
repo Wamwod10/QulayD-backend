@@ -13,6 +13,11 @@ export const createUserController = (service, prisma) => ({
     await writeAudit(prisma, request, { action: "UPDATE", entity: "Employee", entityId: result.data.id, before: result.before, after: result.data });
     return sendSuccess(response, { data: result.data });
   },
+  remove: async (request, response) => {
+    const result = await service.remove(request.tenant.companyId, request.params.id, request.auth.user.roles, request.auth.employeeId);
+    await writeAudit(prisma, request, { action: "DELETE", entity: "Employee", entityId: request.params.id, before: result.before, after: result.data });
+    return sendSuccess(response, { data: result.data });
+  },
   resetPassword: async (request, response) => {
     await service.resetPassword(request.tenant.companyId, request.params.id, request.validated.body, request.auth.user.roles);
     await writeAudit(prisma, request, { action: "RESET_PASSWORD", entity: "Employee", entityId: request.params.id });

@@ -41,6 +41,16 @@ export function createUserService(repository) {
       if (result.invalidAssignment) throw new ValidationError("Branch, warehouse or employee type is invalid");
       return { before: publicEmployee(result.before), data: publicEmployee(result.employee) };
     },
+    async remove(companyId, id, actorRoles, actorEmployeeId) {
+      const target = await repository.find(companyId, id);
+      if (!target) throw new NotFoundError("Employee not found");
+      if (target.id === actorEmployeeId) throw new ValidationError("You cannot remove your own active account");
+      if (target.roles.some(({ role }) => role.code === "OWNER")) throw new ValidationError("Owner account cannot be removed");
+      if (!actorRoles.includes("OWNER") && target.roles.some(({ role }) => role.code === "ADMIN")) throw new ValidationError("Only an owner can remove an administrator");
+      const result = await repository.archive(companyId, id);
+      if (!result) throw new NotFoundError("Employee not found");
+      return { before: publicEmployee(result.before), data: publicEmployee(result.employee) };
+    },
     async resetPassword(companyId, id, input, actorRoles) {
       const target = await repository.find(companyId, id);
       if (target?.roles.some(({ role }) => role.code === "OWNER") && !actorRoles.includes("OWNER")) throw new ValidationError("Only an owner can reset an owner password");

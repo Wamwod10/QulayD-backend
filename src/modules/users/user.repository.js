@@ -1,5 +1,5 @@
 const include = {
-  branch: true, warehouse: true, modules: true,
+  branch: true, warehouse: true, employeeType: true, modules: true,
   roles: { include: { role: { include: { permissions: { include: { permission: true } } } } } },
 };
 
@@ -55,6 +55,15 @@ export function createUserRepository(prisma) {
           if (modules.length) await tx.employeeModule.createMany({ data: modules.map((module) => ({ employeeId: id, module })) });
         }
         const employee = await tx.employee.update({ where: { id }, data, include });
+        return { before, employee };
+      });
+    },
+    archive(companyId, id) {
+      return prisma.$transaction(async (tx) => {
+        const before = await tx.employee.findFirst({ where: { id, companyId, deletedAt: null }, include });
+        if (!before) return null;
+        const employee = await tx.employee.update({ where: { id }, data: { status: "TERMINATED", deletedAt: new Date(), tokenVersion: { increment: 1 } }, include });
+        await tx.session.updateMany({ where: { employeeId: id, revokedAt: null }, data: { revokedAt: new Date(), revokeReason: "EMPLOYEE_REMOVED" } });
         return { before, employee };
       });
     },

@@ -3,8 +3,7 @@ services:
     name: qulay-backend
     runtime: node
     plan: starter
-    rootDir: backend
-    buildCommand: npm ci && npm run build && npm run prisma:migrate:deploy && npm run prisma:seed
+    buildCommand: npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 && npm run build && npm run prisma:migrate:deploy && npm run prisma:seed
     startCommand: npm start
     healthCheckPath: /api/v1/health
     autoDeployTrigger: commit
@@ -16,7 +15,7 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: CORS_ORIGIN
-        value: https://qulay-d.vercel.app
+        value: https://qulay-d.vercel.app,http://localhost:5173
       - key: FRONTEND_RESET_URL
         value: https://qulay-d.vercel.app/reset-password
       - key: JWT_ACCESS_SECRET

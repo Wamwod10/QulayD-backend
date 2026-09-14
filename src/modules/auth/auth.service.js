@@ -4,6 +4,7 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { AuthenticationError, ConflictError } from "../../shared/errors/index.js";
 import { MODULES } from "../../shared/constants/permissions.js";
+import { WORKSPACE_MODULES } from "../../shared/constants/workspaces.js";
 import {
   createAccessToken, createOpaqueToken, createRefreshToken, hashToken,
   refreshExpiryDate, verifyRefreshToken,
@@ -11,7 +12,8 @@ import {
 
 const defaultSettings = () => ({
   company: { currency: "UZS", language: "uz", timezone: "Asia/Tashkent" },
-  modules: Object.fromEntries(MODULES.map((module) => [module, true])),
+  modules: Object.fromEntries(MODULES.map((module) => [module, !WORKSPACE_MODULES.includes(module)])),
+  employeeWorkspaces: Object.fromEntries(WORKSPACE_MODULES.map((module) => [module, false])),
   sales: { allowNegativeStock: false, autoConfirmOrders: false },
   inventory: { reservations: true, lowStockAlerts: true, requireAdjustmentApproval: true },
   notifications: { lowStock: true, overdueDebt: true, payment: true, newOrder: true },
@@ -29,8 +31,11 @@ export function publicEmployee(employee) {
   const modules = employee.modules?.filter((entry) => entry.enabled).map((entry) => entry.module) ?? [];
   return {
     id: employee.id, companyId: employee.companyId, branchId: employee.branchId,
-    warehouseId: employee.warehouseId, login: employee.login, phone: employee.phone,
+    warehouseId: employee.warehouseId, employeeTypeId: employee.employeeTypeId, login: employee.login, phone: employee.phone,
     email: employee.email, name: employee.name, title: employee.title, status: employee.status,
+    branch: employee.branch ? { id: employee.branch.id, name: employee.branch.name, code: employee.branch.code } : undefined,
+    warehouse: employee.warehouse ? { id: employee.warehouse.id, name: employee.warehouse.name, code: employee.warehouse.code } : undefined,
+    employeeType: employee.employeeType ? { id: employee.employeeType.id, code: employee.employeeType.code, name: employee.employeeType.name } : undefined,
     mustChangePassword: employee.mustChangePassword, roles, primaryRole: roles[0] ?? "EMPLOYEE",
     permissions, modules: roles.includes("OWNER") || roles.includes("ADMIN") ? MODULES : modules,
     company: employee.company ? {

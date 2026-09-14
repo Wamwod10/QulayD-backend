@@ -3,6 +3,7 @@ import { ensureCompanyRoles } from "../access-control/access-control.bootstrap.j
 export function createAuthRepository(prisma) {
   const accessInclude = {
     company: true,
+    branch: true, warehouse: true, employeeType: true,
     roles: { include: { role: { include: { permissions: { include: { permission: true } } } } } },
     modules: true,
   };
