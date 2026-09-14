@@ -13,6 +13,8 @@ export function createProductService(repository) {
         { name: { contains: page.search, mode: "insensitive" } },
         { sku: { contains: page.search } },
         { barcodes: { some: { barcode: { contains: page.search } } } },
+        { variants: { some: { OR: [{ name: { contains: page.search, mode: "insensitive" } }, { sku: { contains: page.search } }] } } },
+        { serials: { some: { OR: [{ serial: { contains: page.search, mode: "insensitive" } }, { imei: { contains: page.search } }] } } },
       ];
       const result = await repository.list(companyId, {
         where, skip: page.skip, take: page.take, orderBy: { [page.sortBy || "createdAt"]: page.sortOrder },

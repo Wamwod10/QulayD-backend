@@ -22,7 +22,7 @@ export function createReportRouter({ prisma }) {
     return sendSuccess(response, { data: { summary, byChannel, topProducts: topProducts.map((row) => ({ ...row, product: names.get(row.productId) })) } });
   }));
   router.get("/inventory", validate({ query }), asyncHandler(async (request, response) => {
-    const where = { companyId: request.tenant.companyId }; if (request.validated.query.warehouseId) where.warehouseId = request.validated.query.warehouseId;
+    const where = { companyId: request.tenant.companyId, stockKey: "BASE" }; if (request.validated.query.warehouseId) where.warehouseId = request.validated.query.warehouseId;
     const [stocks, movementCount] = await Promise.all([prisma.warehouseStock.findMany({ where, include: { product: true, warehouse: true } }),
       prisma.stockMovement.count({ where: { companyId: request.tenant.companyId, ...(Object.keys(period(request.validated.query)).length ? { createdAt: period(request.validated.query) } : {}) } })]);
     const summary = stocks.reduce((acc, row) => { acc.onHand += Number(row.onHand); acc.reserved += Number(row.reserved);

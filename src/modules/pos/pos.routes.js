@@ -19,17 +19,37 @@ export function createPosRouter({ prisma }) {
   router.use("/payment-methods", createTenantCrudRouter({ prisma, model: "paymentMethodConfig", entity: "PaymentMethod", module: "pos",
     createSchema: paymentMethodSchema, searchFields: ["name", "code"], filterFields: ["status", "method"], softDelete: false }));
   router.get("/held-carts", requirePermission("pos.read"), asyncHandler(async (request, response) => sendSuccess(response, { data: await prisma.heldCart.findMany({
-    where: { companyId: request.tenant.companyId, employeeId: request.auth.employeeId }, include: { customer: true, items: { include: { product: true } } }, orderBy: { createdAt: "desc" }, take: 100,
+    where: { companyId: request.tenant.companyId, employeeId: request.auth.employeeId }, include: { customer: true, items: { include: { product: true, variant: true, package: true } } }, orderBy: { createdAt: "desc" }, take: 100,
   }) })));
   router.post("/held-carts", requirePermission("pos.create"), validate({ body: heldCartSchema }), asyncHandler(async (request, response) => {
     const input = request.validated.body; const productIds = [...new Set(input.items.map(({ productId }) => productId))];
     const [products, customer] = await Promise.all([
-      prisma.product.count({ where: { companyId: request.tenant.companyId, id: { in: productIds }, deletedAt: null } }),
+      prisma.product.findMany({ where: { companyId: request.tenant.companyId, id: { in: productIds }, deletedAt: null, status: "ACTIVE" }, include: { variants: true, packages: true, serials: true } }),
       input.customerId ? prisma.customer.count({ where: { companyId: request.tenant.companyId, id: input.customerId, deletedAt: null } }) : 1,
     ]);
-    if (products !== productIds.length || customer !== 1) throw new ValidationError("Invalid held cart resource reference");
+    if (products.length !== productIds.length || customer !== 1) throw new ValidationError("Invalid held cart resource reference");
+    const productMap = new Map(products.map((product) => [product.id, product]));
+    const usedSerialIds = new Set();
+    for (const row of input.items) {
+      const product = productMap.get(row.productId);
+      const variant = row.variantId ? product.variants.find((item) => item.id === row.variantId && item.status === "ACTIVE") : null;
+      const productPackage = row.packageId ? product.packages.find((item) => item.id === row.packageId && item.status === "ACTIVE") : null;
+      if (row.variantId && !variant) throw new ValidationError("Held cart variant does not belong to product");
+      if (row.packageId && (!productPackage || (productPackage.variantId && productPackage.variantId !== row.variantId))) throw new ValidationError("Held cart package does not belong to product/variant");
+      const serialIds = row.serialIds || [];
+      if (product.trackSerial) {
+        const required = Number(row.baseQuantity || Number(row.quantity) * Number(row.conversionToBase || 1));
+        if (!Number.isInteger(required) || serialIds.length !== required) throw new ValidationError("Every serialized held-cart unit must include one serial / IMEI");
+        const validIds = new Set(product.serials.filter((item) => item.status === "AVAILABLE" && (item.variantId || null) === (row.variantId || null)).map((item) => item.id));
+        if (serialIds.some((id) => !validIds.has(id) || usedSerialIds.has(id))) throw new ValidationError("Held cart contains an invalid or duplicate serial / IMEI");
+        serialIds.forEach((id) => usedSerialIds.add(id));
+      } else if (serialIds.length) throw new ValidationError("Serial / IMEI can only be attached to serialized products");
+    }
     const { items, ...fields } = input; const data = await prisma.heldCart.create({ data: { ...fields, companyId: request.tenant.companyId, employeeId: request.auth.employeeId,
-      items: { create: items.map((row) => ({ ...row, discount: row.discount || 0 })) } }, include: { items: true } });
+      items: { create: items.map((row) => { const conversionToBase = row.conversionToBase || 1; return { productId: row.productId, variantId: row.variantId,
+        packageId: row.packageId, quantity: row.quantity, baseQuantity: row.baseQuantity || row.quantity * conversionToBase, conversionToBase,
+        unitPrice: row.unitPrice, discount: row.discountAmount || (row.discount?.type === "FIXED" ? row.discount.value : 0), serialIds: row.serialIds || [] }; }) } },
+      include: { items: { include: { product: true, variant: true, package: true } } } });
     await writeAudit(prisma, request, { action: "CREATE", entity: "HeldCart", entityId: data.id, after: data }); return sendSuccess(response, { statusCode: 201, data });
   }));
   router.delete("/held-carts/:id", requirePermission("pos.delete"), validate({ params }), asyncHandler(async (request, response) => {
@@ -39,7 +59,7 @@ export function createPosRouter({ prisma }) {
     return sendSuccess(response, { data: { deleted: result.count === 1 } });
   }));
   router.get("/receipts/:id", requirePermission("pos.read"), validate({ params }), asyncHandler(async (request, response) => {
-    const data = await prisma.receipt.findFirst({ where: { id: request.params.id, companyId: request.tenant.companyId }, include: { order: { include: { items: { include: { product: true } }, customer: true } }, payment: true } });
+    const data = await prisma.receipt.findFirst({ where: { id: request.params.id, companyId: request.tenant.companyId }, include: { order: { include: { items: { include: { product: true, variant: true, package: true } }, customer: true } }, payment: true } });
     if (!data) throw new NotFoundError("Receipt not found");
     return sendSuccess(response, { data });
   }));

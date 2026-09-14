@@ -177,6 +177,14 @@ enum ReturnStatus {
   CANCELLED
 }
 
+enum ProductSerialStatus {
+  AVAILABLE
+  RESERVED
+  SOLD
+  RETURNED
+  DAMAGED
+}
+
 model Company {
   id                String                @id @default(uuid()) @db.Uuid
   name              String
@@ -216,6 +224,10 @@ model Company {
   heldCarts         HeldCart[]
   approvals         Approval[]
   currencyRates     CurrencyRate[]
+  productImages     ProductImage[]
+  productPackages   ProductPackage[]
+  productBatches    ProductBatch[]
+  productSerials    ProductSerial[]
 
   @@index([status])
 }
@@ -259,6 +271,8 @@ model Warehouse {
   employees        Employee[]
   stocks           WarehouseStock[]
   movements        StockMovement[]
+  productBatches   ProductBatch[]
+  productSerials   ProductSerial[]
   reservations     StockReservation[]
   sourceTransfers  StockTransfer[]    @relation("TransferSource")
   targetTransfers  StockTransfer[]    @relation("TransferTarget")
@@ -422,70 +436,202 @@ model Unit {
 }
 
 model Product {
-  id              String                @id @default(uuid()) @db.Uuid
-  companyId       String                @db.Uuid
-  categoryId      String?               @db.Uuid
-  unitId          String                @db.Uuid
-  sku             String
-  name            String
-  description     String?
-  imageUrl        String?
-  costPrice       Decimal               @default(0) @db.Decimal(18, 2)
-  minStock        Decimal               @default(0) @db.Decimal(18, 3)
-  trackStock      Boolean               @default(true)
-  status          RecordStatus          @default(ACTIVE)
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
-  deletedAt       DateTime?
-  company         Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  category        Category?             @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  unit            Unit                  @relation(fields: [unitId], references: [id])
-  barcodes        ProductBarcode[]
-  variants        ProductVariant[]
-  prices          ProductPrice[]
-  stocks          WarehouseStock[]
-  movements       StockMovement[]
-  reservations    StockReservation[]
-  orderItems      OrderItem[]
-  receiptItems    GoodsReceiptItem[]
-  transferItems   StockTransferItem[]
-  countItems      InventoryCountItem[]
-  adjustmentItems StockAdjustmentItem[]
-  returnItems     ReturnItem[]
-  heldCartItems   HeldCartItem[]
+  id                String                @id @default(uuid()) @db.Uuid
+  companyId         String                @db.Uuid
+  categoryId        String?               @db.Uuid
+  unitId            String                @db.Uuid
+  supplierId        String?               @db.Uuid
+  sku               String
+  name              String
+  description       String?
+  manufacturer      String?
+  model             String?
+  note              String?
+  warehouseLocation String?
+  imageUrl          String?
+  costPrice         Decimal               @default(0) @db.Decimal(18, 2)
+  minStock          Decimal               @default(0) @db.Decimal(18, 3)
+  trackStock        Boolean               @default(true)
+  trackExpiry       Boolean               @default(false)
+  trackLot          Boolean               @default(false)
+  trackSerial       Boolean               @default(false)
+  isMarked          Boolean               @default(false)
+  status            RecordStatus          @default(ACTIVE)
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  deletedAt         DateTime?
+  company           Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category          Category?             @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  unit              Unit                  @relation(fields: [unitId], references: [id])
+  supplier          Supplier?             @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  images            ProductImage[]
+  barcodes          ProductBarcode[]
+  variants          ProductVariant[]
+  packages          ProductPackage[]
+  batches           ProductBatch[]
+  serials           ProductSerial[]
+  prices            ProductPrice[]
+  stocks            WarehouseStock[]
+  movements         StockMovement[]
+  reservations      StockReservation[]
+  orderItems        OrderItem[]
+  receiptItems      GoodsReceiptItem[]
+  transferItems     StockTransferItem[]
+  countItems        InventoryCountItem[]
+  adjustmentItems   StockAdjustmentItem[]
+  returnItems       ReturnItem[]
+  heldCartItems     HeldCartItem[]
 
   @@unique([companyId, sku])
   @@index([companyId, name])
   @@index([companyId, categoryId, status])
 }
 
-model ProductBarcode {
+model ProductImage {
   id        String   @id @default(uuid()) @db.Uuid
   companyId String   @db.Uuid
   productId String   @db.Uuid
-  barcode   String
+  url       String
+  alt       String?
+  sortOrder Int      @default(0)
   isPrimary Boolean  @default(false)
   createdAt DateTime @default(now())
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, sortOrder])
+}
+
+model ProductBarcode {
+  id        String          @id @default(uuid()) @db.Uuid
+  companyId String          @db.Uuid
+  productId String          @db.Uuid
+  variantId String?         @db.Uuid
+  packageId String?         @db.Uuid
+  barcode   String
+  isPrimary Boolean         @default(false)
+  createdAt DateTime        @default(now())
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  package   ProductPackage? @relation(fields: [packageId], references: [id], onDelete: Cascade)
 
   @@unique([companyId, barcode])
   @@index([productId])
+  @@index([variantId])
+  @@index([packageId])
 }
 
 model ProductVariant {
-  id         String       @id @default(uuid()) @db.Uuid
-  companyId  String       @db.Uuid
-  productId  String       @db.Uuid
-  name       String
-  sku        String
-  attributes Json         @default("{}")
-  status     RecordStatus @default(ACTIVE)
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
-  product    Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id            String             @id @default(uuid()) @db.Uuid
+  companyId     String             @db.Uuid
+  productId     String             @db.Uuid
+  name          String
+  sku           String
+  attributes    Json               @default("{}")
+  imageUrl      String?
+  costPrice     Decimal?           @db.Decimal(18, 2)
+  price         Decimal?           @db.Decimal(18, 2)
+  status        RecordStatus       @default(ACTIVE)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  product       Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  barcodes      ProductBarcode[]
+  packages      ProductPackage[]
+  batches       ProductBatch[]
+  serials       ProductSerial[]
+  orderItems    OrderItem[]
+  receiptItems    GoodsReceiptItem[]
+  returnItems     ReturnItem[]
+  heldCartItems   HeldCartItem[]
+  transferItems   StockTransferItem[]
+  adjustmentItems StockAdjustmentItem[]
+  stocks          WarehouseStock[]
 
   @@unique([companyId, sku])
   @@index([productId, status])
+}
+
+model ProductPackage {
+  id                 String             @id @default(uuid()) @db.Uuid
+  companyId          String             @db.Uuid
+  productId          String             @db.Uuid
+  variantId          String?            @db.Uuid
+  parentPackageId    String?            @db.Uuid
+  name               String
+  conversionQuantity Decimal            @db.Decimal(18, 3)
+  conversionToBase   Decimal            @db.Decimal(18, 6)
+  costPrice          Decimal?           @db.Decimal(18, 2)
+  price              Decimal?           @db.Decimal(18, 2)
+  status             RecordStatus       @default(ACTIVE)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  company            Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  product            Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant            ProductVariant?    @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  parent             ProductPackage?    @relation("PackageTree", fields: [parentPackageId], references: [id], onDelete: Restrict)
+  children           ProductPackage[]   @relation("PackageTree")
+  barcodes           ProductBarcode[]
+  orderItems         OrderItem[]
+  receiptItems       GoodsReceiptItem[]
+  returnItems        ReturnItem[]
+  heldCartItems      HeldCartItem[]
+  transferItems      StockTransferItem[]
+  adjustmentItems    StockAdjustmentItem[]
+
+  @@index([companyId, productId, status])
+  @@index([variantId])
+}
+
+model ProductBatch {
+  id             String             @id @default(uuid()) @db.Uuid
+  companyId      String             @db.Uuid
+  productId      String             @db.Uuid
+  variantId      String?            @db.Uuid
+  warehouseId    String             @db.Uuid
+  lotNumber      String
+  variantKey     String             @default("BASE")
+  manufacturedAt DateTime?
+  expiresAt      DateTime?
+  quantity       Decimal            @default(0) @db.Decimal(18, 3)
+  reserved       Decimal            @default(0) @db.Decimal(18, 3)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  company        Company            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  product        Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant        ProductVariant?    @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  warehouse      Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  serials         ProductSerial[]
+  receiptItems    GoodsReceiptItem[]
+  transferItems   StockTransferItem[]
+  adjustmentItems StockAdjustmentItem[]
+
+  @@unique([companyId, productId, warehouseId, lotNumber, variantKey])
+  @@index([companyId, warehouseId, expiresAt])
+}
+
+model ProductSerial {
+  id          String              @id @default(uuid()) @db.Uuid
+  companyId   String              @db.Uuid
+  productId   String              @db.Uuid
+  variantId   String?             @db.Uuid
+  warehouseId String              @db.Uuid
+  batchId     String?             @db.Uuid
+  serial      String
+  imei        String?
+  status      ProductSerialStatus @default(AVAILABLE)
+  soldOrderId String?             @db.Uuid
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  company     Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  product     Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant     ProductVariant?     @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  warehouse   Warehouse           @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  batch       ProductBatch?       @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  soldOrder   Order?              @relation(fields: [soldOrderId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, serial])
+  @@unique([companyId, imei])
+  @@index([companyId, productId, warehouseId, status])
 }
 
 model PriceList {
@@ -524,19 +670,23 @@ model ProductPrice {
 }
 
 model WarehouseStock {
-  id          String    @id @default(uuid()) @db.Uuid
-  companyId   String    @db.Uuid
-  warehouseId String    @db.Uuid
-  productId   String    @db.Uuid
-  onHand      Decimal   @default(0) @db.Decimal(18, 3)
-  reserved    Decimal   @default(0) @db.Decimal(18, 3)
-  version     Int       @default(0)
-  updatedAt   DateTime  @updatedAt
-  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id          String          @id @default(uuid()) @db.Uuid
+  companyId   String          @db.Uuid
+  warehouseId String          @db.Uuid
+  productId   String          @db.Uuid
+  variantId   String?         @db.Uuid
+  stockKey    String          @default("BASE")
+  onHand      Decimal         @default(0) @db.Decimal(18, 3)
+  reserved    Decimal         @default(0) @db.Decimal(18, 3)
+  version     Int             @default(0)
+  updatedAt   DateTime        @updatedAt
+  warehouse   Warehouse       @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  product     Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant     ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
 
-  @@unique([warehouseId, productId])
+  @@unique([warehouseId, productId, stockKey])
   @@index([companyId, productId])
+  @@index([companyId, productId, variantId])
 }
 
 model StockMovement {
@@ -544,6 +694,9 @@ model StockMovement {
   companyId     String            @db.Uuid
   warehouseId   String            @db.Uuid
   productId     String            @db.Uuid
+  variantId     String?           @db.Uuid
+  packageId     String?           @db.Uuid
+  batchId       String?           @db.Uuid
   employeeId    String?           @db.Uuid
   type          StockMovementType
   quantity      Decimal           @db.Decimal(18, 3)
@@ -568,6 +721,8 @@ model StockReservation {
   orderItemId String            @db.Uuid
   warehouseId String            @db.Uuid
   productId   String            @db.Uuid
+  variantId   String?           @db.Uuid
+  packageId   String?           @db.Uuid
   quantity    Decimal           @db.Decimal(18, 3)
   status      ReservationStatus @default(ACTIVE)
   expiresAt   DateTime?
@@ -604,15 +759,25 @@ model StockTransfer {
 }
 
 model StockTransferItem {
-  id         String        @id @default(uuid()) @db.Uuid
-  transferId String        @db.Uuid
-  productId  String        @db.Uuid
-  quantity   Decimal       @db.Decimal(18, 3)
-  received   Decimal       @default(0) @db.Decimal(18, 3)
-  transfer   StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
-  product    Product       @relation(fields: [productId], references: [id])
+  id         String          @id @default(uuid()) @db.Uuid
+  transferId String          @db.Uuid
+  productId  String          @db.Uuid
+  variantId  String?         @db.Uuid
+  packageId  String?         @db.Uuid
+  batchId    String?         @db.Uuid
+  quantity   Decimal         @db.Decimal(18, 3)
+  received   Decimal         @default(0) @db.Decimal(18, 3)
+  serialIds  Json            @default("[]")
+  transfer   StockTransfer   @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  product    Product         @relation(fields: [productId], references: [id])
+  variant    ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  package    ProductPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  batch      ProductBatch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
-  @@unique([transferId, productId])
+  @@index([transferId, productId])
+  @@index([variantId])
+  @@index([packageId])
+  @@index([batchId])
 }
 
 model InventoryCount {
@@ -663,15 +828,29 @@ model StockAdjustment {
 }
 
 model StockAdjustmentItem {
-  id           String          @id @default(uuid()) @db.Uuid
-  adjustmentId String          @db.Uuid
-  productId    String          @db.Uuid
-  quantity     Decimal         @db.Decimal(18, 3)
-  unitCost     Decimal?        @db.Decimal(18, 2)
-  adjustment   StockAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
-  product      Product         @relation(fields: [productId], references: [id])
+  id             String          @id @default(uuid()) @db.Uuid
+  adjustmentId   String          @db.Uuid
+  productId      String          @db.Uuid
+  variantId      String?         @db.Uuid
+  packageId      String?         @db.Uuid
+  batchId        String?         @db.Uuid
+  quantity       Decimal         @db.Decimal(18, 3)
+  unitCost       Decimal?        @db.Decimal(18, 2)
+  serialIds      Json            @default("[]")
+  serialNumbers  Json            @default("[]")
+  lotNumber      String?
+  manufacturedAt DateTime?
+  expiresAt      DateTime?
+  adjustment     StockAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+  product        Product         @relation(fields: [productId], references: [id])
+  variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  package        ProductPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  batch          ProductBatch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
-  @@unique([adjustmentId, productId])
+  @@index([adjustmentId, productId])
+  @@index([variantId])
+  @@index([packageId])
+  @@index([batchId])
 }
 
 model Customer {
@@ -732,6 +911,7 @@ model Supplier {
   debts         Debt[]
   ledger        LedgerEntry[]
   payments      Payment[]
+  products      Product[]
 
   @@unique([companyId, code])
   @@index([companyId, name])
@@ -801,6 +981,7 @@ model Order {
   payments          Payment[]
   receipt           Receipt?
   returns           Return[]
+  soldSerials       ProductSerial[]
 
   @@unique([companyId, number])
   @@index([companyId, status, orderedAt])
@@ -808,19 +989,32 @@ model Order {
 }
 
 model OrderItem {
-  id           String             @id @default(uuid()) @db.Uuid
-  orderId      String             @db.Uuid
-  productId    String             @db.Uuid
-  quantity     Decimal            @db.Decimal(18, 3)
-  fulfilledQty Decimal            @default(0) @db.Decimal(18, 3)
-  unitPrice    Decimal            @db.Decimal(18, 2)
-  discount     Decimal            @default(0) @db.Decimal(18, 2)
-  tax          Decimal            @default(0) @db.Decimal(18, 2)
-  total        Decimal            @db.Decimal(18, 2)
-  order        Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  product      Product            @relation(fields: [productId], references: [id])
-  reservations StockReservation[]
-  returnItems  ReturnItem[]
+  id               String             @id @default(uuid()) @db.Uuid
+  orderId          String             @db.Uuid
+  productId        String             @db.Uuid
+  variantId        String?            @db.Uuid
+  packageId        String?            @db.Uuid
+  quantity         Decimal            @db.Decimal(18, 3)
+  baseQuantity     Decimal?           @db.Decimal(18, 3)
+  fulfilledQty     Decimal            @default(0) @db.Decimal(18, 3)
+  unitPrice        Decimal            @db.Decimal(18, 2)
+  discount         Decimal            @default(0) @db.Decimal(18, 2)
+  tax              Decimal            @default(0) @db.Decimal(18, 2)
+  total            Decimal            @db.Decimal(18, 2)
+  productName      String?
+  sku              String?
+  unitName         String?
+  variantName      String?
+  packageName      String?
+  conversionToBase Decimal            @default(1) @db.Decimal(18, 6)
+  serialIds        Json               @default("[]")
+  batchAllocations Json               @default("[]")
+  order            Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product          Product            @relation(fields: [productId], references: [id])
+  variant          ProductVariant?    @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  package          ProductPackage?    @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  reservations     StockReservation[]
+  returnItems      ReturnItem[]
 
   @@index([orderId])
   @@index([productId])
@@ -841,19 +1035,19 @@ model OrderStatusHistory {
 }
 
 model PickList {
-  id        String         @id @default(uuid()) @db.Uuid
-  companyId String         @db.Uuid
-  orderId   String         @db.Uuid
-  number    String
-  status    DocumentStatus @default(DRAFT)
-  progress  Int            @default(0)
-  startedAt DateTime?
-  pickedAt  DateTime?
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
-  order     Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  pickerEmployeeId String? @db.Uuid
-  pickerEmployee   Employee? @relation(fields: [pickerEmployeeId], references: [id], onDelete: SetNull)
+  id               String         @id @default(uuid()) @db.Uuid
+  companyId        String         @db.Uuid
+  orderId          String         @db.Uuid
+  number           String
+  status           DocumentStatus @default(DRAFT)
+  progress         Int            @default(0)
+  startedAt        DateTime?
+  pickedAt         DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  order            Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  pickerEmployeeId String?        @db.Uuid
+  pickerEmployee   Employee?      @relation(fields: [pickerEmployeeId], references: [id], onDelete: SetNull)
 
   @@unique([companyId, number])
   @@index([companyId, status])
@@ -894,16 +1088,28 @@ model GoodsReceipt {
 }
 
 model GoodsReceiptItem {
-  id        String       @id @default(uuid()) @db.Uuid
-  receiptId String       @db.Uuid
-  productId String       @db.Uuid
-  quantity  Decimal      @db.Decimal(18, 3)
-  unitCost  Decimal      @db.Decimal(18, 2)
-  total     Decimal      @db.Decimal(18, 2)
-  receipt   GoodsReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
-  product   Product      @relation(fields: [productId], references: [id])
+  id               String          @id @default(uuid()) @db.Uuid
+  receiptId        String          @db.Uuid
+  productId        String          @db.Uuid
+  variantId        String?         @db.Uuid
+  packageId        String?         @db.Uuid
+  batchId          String?         @db.Uuid
+  quantity         Decimal         @db.Decimal(18, 3)
+  baseQuantity     Decimal?        @db.Decimal(18, 3)
+  conversionToBase Decimal         @default(1) @db.Decimal(18, 6)
+  unitCost         Decimal         @db.Decimal(18, 2)
+  total            Decimal         @db.Decimal(18, 2)
+  lotNumber        String?
+  manufacturedAt   DateTime?
+  expiresAt        DateTime?
+  serialNumbers    Json            @default("[]")
+  receipt          GoodsReceipt    @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  product          Product         @relation(fields: [productId], references: [id])
+  variant          ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  package          ProductPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  batch            ProductBatch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
-  @@unique([receiptId, productId])
+  @@index([receiptId, productId])
 }
 
 model DeliveryTrip {
@@ -981,15 +1187,18 @@ model Invoice {
 }
 
 model InvoiceItem {
-  id          String  @id @default(uuid()) @db.Uuid
-  invoiceId   String  @db.Uuid
-  description String
-  productId   String? @db.Uuid
-  quantity    Decimal @db.Decimal(18, 3)
-  unitPrice   Decimal @db.Decimal(18, 2)
-  tax         Decimal @default(0) @db.Decimal(18, 2)
-  total       Decimal @db.Decimal(18, 2)
-  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  id           String   @id @default(uuid()) @db.Uuid
+  invoiceId    String   @db.Uuid
+  description  String
+  productId    String?  @db.Uuid
+  variantName  String?
+  packageName  String?
+  baseQuantity Decimal? @db.Decimal(18, 3)
+  quantity     Decimal  @db.Decimal(18, 3)
+  unitPrice    Decimal  @db.Decimal(18, 2)
+  tax          Decimal  @default(0) @db.Decimal(18, 2)
+  total        Decimal  @db.Decimal(18, 2)
+  invoice      Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   @@index([invoiceId])
 }
@@ -1192,17 +1401,25 @@ model Return {
 }
 
 model ReturnItem {
-  id          String     @id @default(uuid()) @db.Uuid
-  returnId    String     @db.Uuid
-  orderItemId String?    @db.Uuid
-  productId   String     @db.Uuid
-  quantity    Decimal    @db.Decimal(18, 3)
-  unitPrice   Decimal    @db.Decimal(18, 2)
-  total       Decimal    @db.Decimal(18, 2)
-  condition   String?
-  return      Return     @relation(fields: [returnId], references: [id], onDelete: Cascade)
-  orderItem   OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
-  product     Product    @relation(fields: [productId], references: [id])
+  id               String          @id @default(uuid()) @db.Uuid
+  returnId         String          @db.Uuid
+  orderItemId      String?         @db.Uuid
+  productId        String          @db.Uuid
+  variantId        String?         @db.Uuid
+  packageId        String?         @db.Uuid
+  quantity         Decimal         @db.Decimal(18, 3)
+  baseQuantity     Decimal?        @db.Decimal(18, 3)
+  conversionToBase Decimal         @default(1) @db.Decimal(18, 6)
+  unitPrice        Decimal         @db.Decimal(18, 2)
+  total            Decimal         @db.Decimal(18, 2)
+  condition        String?
+  serialIds        Json            @default("[]")
+  batchAllocations Json            @default("[]")
+  return           Return          @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  orderItem        OrderItem?      @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
+  product          Product         @relation(fields: [productId], references: [id])
+  variant          ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  package          ProductPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
 
   @@index([returnId])
 }
@@ -1541,16 +1758,23 @@ model HeldCart {
 }
 
 model HeldCartItem {
-  id         String   @id @default(uuid()) @db.Uuid
-  heldCartId String   @db.Uuid
-  productId  String   @db.Uuid
-  quantity   Decimal  @db.Decimal(18, 3)
-  unitPrice  Decimal  @db.Decimal(18, 2)
-  discount   Decimal  @default(0) @db.Decimal(18, 2)
-  heldCart   HeldCart @relation(fields: [heldCartId], references: [id], onDelete: Cascade)
-  product    Product  @relation(fields: [productId], references: [id])
+  id               String          @id @default(uuid()) @db.Uuid
+  heldCartId       String          @db.Uuid
+  productId        String          @db.Uuid
+  variantId        String?         @db.Uuid
+  packageId        String?         @db.Uuid
+  quantity         Decimal         @db.Decimal(18, 3)
+  baseQuantity     Decimal?        @db.Decimal(18, 3)
+  conversionToBase Decimal         @default(1) @db.Decimal(18, 6)
+  unitPrice        Decimal         @db.Decimal(18, 2)
+  discount         Decimal         @default(0) @db.Decimal(18, 2)
+  serialIds        Json            @default("[]")
+  heldCart         HeldCart        @relation(fields: [heldCartId], references: [id], onDelete: Cascade)
+  product          Product         @relation(fields: [productId], references: [id])
+  variant          ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  package          ProductPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
 
-  @@unique([heldCartId, productId])
+  @@index([heldCartId, productId])
 }
 
 model Approval {

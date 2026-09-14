@@ -1,6 +1,7 @@
 import { z } from "zod";
 const orderItem = z.object({
-  productId: z.uuid(), quantity: z.number().positive(), unitPrice: z.number().min(0),
+  productId: z.uuid(), variantId: z.uuid().nullable().optional(), packageId: z.uuid().nullable().optional(),
+  quantity: z.number().positive(), unitPrice: z.number().min(0),
   discount: z.number().min(0).optional(), tax: z.number().min(0).optional(),
 });
 export const orderCreateSchema = z.object({
