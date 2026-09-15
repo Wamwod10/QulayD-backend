@@ -28,10 +28,7 @@ export function createAuthRepository(prisma) {
         const branch = await tx.branch.create({ data: { companyId: company.id, name: "Bosh filial", code: "MAIN" } });
         const warehouse = await tx.warehouse.create({ data: { companyId: company.id, branchId: branch.id, name: "Markaziy ombor", code: "MAIN" } });
         await tx.unit.create({ data: { companyId: company.id, name: "Dona", shortName: "dona" } });
-        await tx.priceList.createMany({ data: [
-          { companyId: company.id, name: "Sotuv narxi", code: "RETAIL", isDefault: true },
-          { companyId: company.id, name: "Ulgurji narx", code: "WHOLESALE" },
-        ] });
+        await tx.priceList.create({ data: { companyId: company.id, name: "Asosiy narx", code: "DEFAULT", isDefault: true } });
         const cashbox = await tx.cashbox.create({ data: { companyId: company.id, branchId: branch.id, warehouseId: warehouse.id, name: "Asosiy kassa", code: "MAIN" } });
         await tx.paymentMethodConfig.createMany({ data: [
           { companyId: company.id, code: "CASH", name: "Naqd", method: "CASH", shortcut: "F1" },

@@ -1,9 +1,6 @@
 import { z } from "zod";
 
-const password = z.string().min(8).max(128)
-  .regex(/[A-Z]/, "Password must contain an uppercase letter")
-  .regex(/[a-z]/, "Password must contain a lowercase letter")
-  .regex(/\d/, "Password must contain a number");
+const password = z.string().min(6, "Password must contain at least 6 characters").max(128);
 const normalizeIdentifier = (value) => {
   const trimmed = value.trim();
   if (/^[+\d ()-]+$/.test(trimmed)) return `${trimmed.startsWith("+") ? "+" : ""}${trimmed.replace(/\D/g, "")}`;
@@ -26,7 +23,7 @@ export const registerOwnerSchema = z.object({
 }).refine((value) => value.login || value.phone || value.email, { message: "Login, phone or email is required" });
 
 export const loginSchema = z.object({ identifier, password: z.string().min(1).max(128), ...device });
-export const pinLoginSchema = z.object({ identifier, pin: z.string().regex(/^\d{4,8}$/), ...device });
+export const pinLoginSchema = z.object({ identifier, pin: z.string().regex(/^\d{6}$/), ...device });
 export const refreshSchema = z.object({ refreshToken: z.string().min(20).optional() });
 export const forgotPasswordSchema = z.object({ identifier });
 export const resetPasswordSchema = z.object({ token: z.string().min(20), newPassword: password });
