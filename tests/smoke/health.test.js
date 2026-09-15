@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 
+import { env } from "../../src/config/env.js";
 import { createTestApp } from "../helpers/testApp.js";
 
 describe("system endpoints", () => {
@@ -70,6 +73,21 @@ describe("system endpoints", () => {
 
     expect(response.headers["x-content-type-options"]).toBe("nosniff");
     expect(response.headers["x-powered-by"]).toBeUndefined();
+  });
+
+  it("allows the separately hosted frontend to embed uploaded images", async () => {
+    const filename = `cross-origin-${process.pid}.webp`;
+    const uploadDirectory = path.resolve(env.UPLOAD_DIR);
+    const uploadPath = path.join(uploadDirectory, filename);
+    await fs.mkdir(uploadDirectory, { recursive: true });
+    await fs.writeFile(uploadPath, "test-image");
+
+    try {
+      const response = await request(createTestApp()).get(`/uploads/${filename}`).expect(200);
+      expect(response.headers["cross-origin-resource-policy"]).toBe("cross-origin");
+    } finally {
+      await fs.unlink(uploadPath).catch(() => {});
+    }
   });
 
   it("rejects a browser origin outside the CORS allowlist", async () => {

@@ -42,7 +42,14 @@ export function createApp(dependencies = {}) {
   app.use(cookieParser());
   app.use(express.json({ limit: env.BODY_LIMIT, strict: true }));
   app.use(express.urlencoded({ extended: false, limit: env.BODY_LIMIT }));
-  app.use("/uploads", express.static(path.resolve(env.UPLOAD_DIR), { dotfiles: "deny", fallthrough: false, immutable: true, maxAge: "7d" }));
+  app.use("/uploads", express.static(path.resolve(env.UPLOAD_DIR), {
+    dotfiles: "deny",
+    fallthrough: false,
+    immutable: true,
+    maxAge: "7d",
+    // Product images are intentionally embedded by the separately hosted frontend.
+    setHeaders: (response) => response.setHeader("Cross-Origin-Resource-Policy", "cross-origin"),
+  }));
 
   app.get("/", (_request, response) => sendSuccess(response, {
     data: {

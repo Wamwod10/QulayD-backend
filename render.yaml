@@ -24,6 +24,8 @@ services:
         generateValue: true
       - key: UPLOAD_DIR
         value: /var/data/qulay-uploads
+      - key: UPLOAD_PUBLIC_BASE_URL
+        value: https://qulayd-backend.onrender.com
     disk:
       name: qulay-uploads
       mountPath: /var/data
