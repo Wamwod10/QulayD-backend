@@ -16,7 +16,7 @@ const body = z.object({ purpose: z.enum(["product", "employee", "company", "deli
 export function createUploadRouter({ prisma }) {
   const router = Router();
   router.get("/", requirePermission("settings.read"), asyncHandler(async (request, response) => sendSuccess(response, { data: await prisma.upload.findMany({ where: { companyId: request.tenant.companyId, deletedAt: null }, orderBy: { createdAt: "desc" }, take: 500 }) })));
-  router.post("/images", requireAnyPermission("inventory.create", "settings.update", "delivery.update"), uploader.single("image"), validate({ body }), asyncHandler(async (request, response) => {
+  router.post("/images", requireAnyPermission("inventory.create", "partners.create", "settings.update", "delivery.update"), uploader.single("image"), validate({ body }), asyncHandler(async (request, response) => {
     if (!request.file) throw new ValidationError("Image file is required"); const data = await processImage(prisma, request.tenant.companyId, request.auth.employeeId, request.file, request.validated.body.purpose);
     await writeAudit(prisma, request, { action: "UPLOAD", entity: "Upload", entityId: data.id, after: data }); return sendSuccess(response, { statusCode: 201, data });
   }));

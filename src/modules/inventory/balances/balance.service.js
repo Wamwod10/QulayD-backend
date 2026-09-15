@@ -3,6 +3,15 @@ import { ConflictError } from "../../../shared/errors/index.js";
 const BASE_STOCK_KEY = "BASE";
 const EPSILON = 0.0005;
 
+export async function resolveAllowNegativeStock(prisma, companyId) {
+  const settings = await prisma.settings.findUnique({ where: { companyId }, select: { data: true } });
+  const data = settings?.data && typeof settings.data === "object" ? settings.data : {};
+  const inventoryValue = data?.inventory?.allowNegativeStock;
+  if (typeof inventoryValue === "boolean") return inventoryValue;
+  // Backward compatibility for companies created before inventory.allowNegativeStock became canonical.
+  return Boolean(data?.sales?.allowNegativeStock);
+}
+
 async function allocateLegacyVariantStock(prisma, {
   companyId, warehouseId, productId, variantId, quantity, reserved, allowNegative,
 }) {

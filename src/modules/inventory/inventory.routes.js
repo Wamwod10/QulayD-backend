@@ -10,7 +10,7 @@ import { paginationMeta, parsePagination } from "../../shared/pagination/index.j
 import { sendSuccess } from "../../shared/responses/index.js";
 import { asyncHandler } from "../../shared/utils/index.js";
 import { writeAudit } from "../audit/audit.service.js";
-import { changeStock } from "./balances/balance.service.js";
+import { changeStock, resolveAllowNegativeStock } from "./balances/balance.service.js";
 import { warehouseCreateSchema } from "./warehouses/warehouse.validation.js";
 
 const idParams = z.object({ id: z.uuid() });
@@ -31,10 +31,12 @@ const adjustmentSchema = z.object({
     serialIds: z.array(z.uuid()).max(1000).optional(), serialNumbers: z.array(z.string().trim().min(1).max(120)).max(1000).optional(),
     lotNumber: z.string().trim().max(100).optional(), manufacturedAt: z.coerce.date().optional(), expiresAt: z.coerce.date().optional() })).min(1).max(500),
 });
+const countLineSchema = z.object({ productId: z.uuid(), counted: z.number().min(0).nullable() });
 const countSchema = z.object({
   warehouseId: z.uuid(), note: z.string().max(1000).optional(),
-  items: z.array(z.object({ productId: z.uuid(), counted: z.number().min(0) })).min(1).max(2000),
+  items: z.array(countLineSchema).min(1).max(2000),
 });
+const countUpdateSchema = z.object({ items: z.array(countLineSchema).min(1).max(2000), note: z.string().max(1000).optional() });
 const receiptSchema = z.object({
   supplierId: z.uuid(), warehouseId: z.uuid(), note: z.string().max(1000).optional(),
   items: z.array(item.extend({ unitCost: z.number().min(0), lotNumber: z.string().trim().max(100).optional(),
@@ -271,10 +273,11 @@ function adjustmentRoutes(router, prisma) {
       const doc = await tx.stockAdjustment.findFirst({ where: { id: request.params.id, companyId }, include: { items: { include: { product: true } } } });
       if (!doc) throw new NotFoundError("Stock adjustment not found");
       if (doc.status !== "PENDING_APPROVAL") throw new ConflictError("Stock adjustment cannot be approved in its current status");
+      const allowNegative = await resolveAllowNegativeStock(tx, companyId);
       for (const row of doc.items) {
         const batchId = await applyAdjustmentTracking(tx, { companyId, warehouseId: doc.warehouseId, row });
         await changeStock(tx, { companyId, warehouseId: doc.warehouseId, productId: row.productId, variantId: row.variantId, packageId: row.packageId, batchId,
-          employeeId: request.auth.employeeId, quantity: row.quantity, type: Number(row.quantity) > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT",
+          employeeId: request.auth.employeeId, quantity: row.quantity, allowNegative, type: Number(row.quantity) > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT",
           referenceType: "StockAdjustment", referenceId: doc.id, reason: doc.reason, unitCost: row.unitCost });
       }
       return tx.stockAdjustment.update({ where: { id: doc.id }, data: { status: "COMPLETED", approvedAt: new Date() }, include: { items: true } });
@@ -314,10 +317,11 @@ function transferRoutes(router, prisma) {
       const doc = await tx.stockTransfer.findFirst({ where: { id: request.params.id, companyId }, include: { items: { include: { product: true } } } });
       if (!doc) throw new NotFoundError("Stock transfer not found");
       if (doc.status !== "APPROVED") throw new ConflictError("Only approved transfers can be completed");
+      const allowNegative = await resolveAllowNegativeStock(tx, companyId);
       for (const row of doc.items) {
         const targetBatchId = await moveTrackedInventory(tx, { companyId, sourceWarehouseId: doc.sourceWarehouseId, targetWarehouseId: doc.targetWarehouseId, row });
         await changeStock(tx, { companyId, warehouseId: doc.sourceWarehouseId, productId: row.productId, variantId: row.variantId, packageId: row.packageId, batchId: row.batchId, employeeId: request.auth.employeeId,
-          quantity: -Number(row.quantity), type: "TRANSFER_OUT", referenceType: "StockTransfer", referenceId: doc.id });
+          quantity: -Number(row.quantity), allowNegative, type: "TRANSFER_OUT", referenceType: "StockTransfer", referenceId: doc.id });
         await changeStock(tx, { companyId, warehouseId: doc.targetWarehouseId, productId: row.productId, variantId: row.variantId, packageId: row.packageId, batchId: targetBatchId, employeeId: request.auth.employeeId,
           quantity: row.quantity, type: "TRANSFER_IN", referenceType: "StockTransfer", referenceId: doc.id });
         await tx.stockTransferItem.update({ where: { id: row.id }, data: { received: row.quantity } });
@@ -341,11 +345,28 @@ function countAndReceiptRoutes(router, prisma) {
       const byProduct = new Map(stocks.map((row) => [row.productId, Number(row.onHand)]));
       return tx.inventoryCount.create({ data: { companyId, warehouseId: input.warehouseId, note: input.note,
         number: await nextDocumentNumber(tx, companyId, "COUNT", "CNT"), status: "IN_PROGRESS",
-        items: { create: input.items.map((row) => ({ productId: row.productId, counted: row.counted,
-          expected: byProduct.get(row.productId) || 0, difference: row.counted - (byProduct.get(row.productId) || 0) })) } }, include: { items: true } });
+        items: { create: input.items.map((row) => { const expected = byProduct.get(row.productId) || 0; return { productId: row.productId, counted: row.counted,
+          expected, difference: row.counted == null ? null : row.counted - expected }; }) } }, include: { items: true } });
     });
     await writeAudit(prisma, request, { action: "CREATE", entity: "InventoryCount", entityId: data.id, after: data });
     return sendSuccess(response, { statusCode: 201, data });
+  }));
+  router.patch("/counts/:id", requirePermission("inventory.update"), validate({ params: idParams, body: countUpdateSchema }), asyncHandler(async (request, response) => {
+    const companyId = request.tenant.companyId; const input = request.validated.body;
+    const data = await prisma.$transaction(async (tx) => {
+      const doc = await tx.inventoryCount.findFirst({ where: { id: request.params.id, companyId }, include: { items: true } });
+      if (!doc) throw new NotFoundError("Inventory count not found");
+      if (doc.status !== "IN_PROGRESS") throw new ConflictError("Only an in-progress inventory count can be edited");
+      const existing = new Map(doc.items.map((row) => [row.productId, row]));
+      if (input.items.some((row) => !existing.has(row.productId))) throw new ValidationError("Inventory count item does not belong to this document");
+      for (const row of input.items) { const current = existing.get(row.productId);
+        await tx.inventoryCountItem.update({ where: { id: current.id }, data: { counted: row.counted, difference: row.counted == null ? null : row.counted - Number(current.expected) } });
+      }
+      if (input.note !== undefined) await tx.inventoryCount.update({ where: { id: doc.id }, data: { note: input.note } });
+      return tx.inventoryCount.findUnique({ where: { id: doc.id }, include: { warehouse: true, items: { include: { product: true } } } });
+    });
+    await writeAudit(prisma, request, { action: "UPDATE", entity: "InventoryCount", entityId: data.id, after: data });
+    return sendSuccess(response, { data });
   }));
   router.post("/counts/:id/complete", requirePermission("inventory.approve"), validate({ params: idParams }), asyncHandler(async (request, response) => {
     const companyId = request.tenant.companyId;
@@ -353,6 +374,7 @@ function countAndReceiptRoutes(router, prisma) {
       const doc = await tx.inventoryCount.findFirst({ where: { id: request.params.id, companyId }, include: { items: { include: { product: true } } } });
       if (!doc) throw new NotFoundError("Inventory count not found");
       if (doc.status !== "IN_PROGRESS") throw new ConflictError("Inventory count cannot be completed");
+      if (doc.items.some((row) => row.counted == null)) throw new ValidationError("All inventory count lines must be counted before completion");
       for (const row of doc.items) if (Number(row.difference) !== 0) {
         if (row.product.trackSerial || row.product.trackLot || row.product.trackExpiry) throw new ValidationError(`${row.product.name}: tracked mahsulot farqini serial/lot ma’lumoti bilan Qoldiq tuzatish orqali kiriting`);
         await changeStock(tx, { companyId, warehouseId: doc.warehouseId, productId: row.productId, employeeId: request.auth.employeeId, quantity: row.difference, type: "COUNT_CORRECTION",

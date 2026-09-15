@@ -11,16 +11,16 @@ export function createSearchRouter({ prisma }) {
     const can = (module, permission) => modules.has(module) && (elevated || permissions.has(permission));
     const jobs = [];
     if (can("inventory", "inventory.read")) jobs.push(prisma.product.findMany({ where: { companyId, deletedAt: null, OR: [{ name: { contains: q, mode: "insensitive" } }, { sku: { contains: q } }, { barcodes: { some: { barcode: { contains: q } } } }] },
-      select: { id: true, name: true, sku: true }, take: limit }).then((rows) => rows.map((row) => ({ type: "product", title: row.name, subtitle: row.sku, url: `/products/${row.id}` }))));
+      select: { id: true, name: true, sku: true }, take: limit }).then((rows) => rows.map((row) => ({ type: "product", title: row.name, subtitle: row.sku, url: "/inventory/products" }))));
     if (can("sales", "sales.read")) jobs.push(prisma.order.findMany({ where: { companyId, OR: [{ number: { contains: q, mode: "insensitive" } }, { customer: { name: { contains: q, mode: "insensitive" } } }] },
-      select: { id: true, number: true, customer: { select: { name: true } } }, take: limit }).then((rows) => rows.map((row) => ({ type: "order", title: row.number, subtitle: row.customer?.name, url: `/orders/${row.id}` }))));
+      select: { id: true, number: true, customer: { select: { name: true } } }, take: limit }).then((rows) => rows.map((row) => ({ type: "order", title: row.number, subtitle: row.customer?.name, url: "/orders" }))));
     if (can("partners", "partners.read")) jobs.push(Promise.all([
       prisma.customer.findMany({ where: { companyId, deletedAt: null, OR: [{ name: { contains: q, mode: "insensitive" } }, { phone: { contains: q } }] }, select: { id: true, name: true, phone: true }, take: limit }),
       prisma.supplier.findMany({ where: { companyId, deletedAt: null, OR: [{ name: { contains: q, mode: "insensitive" } }, { phone: { contains: q } }] }, select: { id: true, name: true, phone: true }, take: limit }),
-    ]).then(([customers, suppliers]) => [...customers.map((row) => ({ type: "customer", title: row.name, subtitle: row.phone, url: `/customers/${row.id}` })),
-      ...suppliers.map((row) => ({ type: "supplier", title: row.name, subtitle: row.phone, url: `/suppliers/${row.id}` }))]));
+    ]).then(([customers, suppliers]) => [...customers.map((row) => ({ type: "customer", title: row.name, subtitle: row.phone, url: "/customers" })),
+      ...suppliers.map((row) => ({ type: "supplier", title: row.name, subtitle: row.phone, url: "/suppliers" }))]));
     if (can("settings", "settings.read")) jobs.push(prisma.employee.findMany({ where: { companyId, deletedAt: null, OR: [{ name: { contains: q, mode: "insensitive" } }, { phone: { contains: q } }] },
-      select: { id: true, name: true, title: true }, take: limit }).then((rows) => rows.map((row) => ({ type: "employee", title: row.name, subtitle: row.title, url: `/settings/employees/${row.id}` }))));
+      select: { id: true, name: true, title: true }, take: limit }).then((rows) => rows.map((row) => ({ type: "employee", title: row.name, subtitle: row.title, url: `/users/${row.id}` }))));
     return sendSuccess(response, { data: (await Promise.all(jobs)).flat().slice(0, limit * 4) });
   })); return router;
 }

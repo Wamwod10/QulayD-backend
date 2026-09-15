@@ -1,7 +1,7 @@
 import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors/index.js";
 import { paginationMeta, parsePagination } from "../../shared/pagination/index.js";
 import { nextDocumentNumber } from "../../shared/documents/index.js";
-import { changeStock } from "../inventory/balances/balance.service.js";
+import { changeStock, resolveAllowNegativeStock } from "../inventory/balances/balance.service.js";
 import { nextOrderNumber } from "./order-number.service.js";
 
 const include = {
@@ -223,10 +223,11 @@ async function addHistory(tx, order, employeeId, note) {
 }
 
 async function reserve(tx, order, employeeId) {
+  const allowNegative = await resolveAllowNegativeStock(tx, order.companyId);
   await assertTrackedBatchAvailability(tx, order);
   for (const row of order.items) {
     await changeStock(tx, { companyId: order.companyId, warehouseId: order.warehouseId, productId: row.productId,
-      employeeId, variantId: row.variantId, packageId: row.packageId, reserved: Number(row.baseQuantity ?? row.quantity), type: "RESERVATION", referenceType: "Order", referenceId: order.id });
+      employeeId, variantId: row.variantId, packageId: row.packageId, reserved: Number(row.baseQuantity ?? row.quantity), allowNegative, type: "RESERVATION", referenceType: "Order", referenceId: order.id });
     await tx.stockReservation.create({ data: { companyId: order.companyId, orderId: order.id, orderItemId: row.id,
       warehouseId: order.warehouseId, productId: row.productId, variantId: row.variantId, packageId: row.packageId, quantity: Number(row.baseQuantity ?? row.quantity) } });
   }
@@ -237,7 +238,7 @@ async function release(tx, order, employeeId, status = "RELEASED") {
   const reservations = await tx.stockReservation.findMany({ where: { orderId: order.id, status: "ACTIVE" } });
   for (const row of reservations) {
     await changeStock(tx, { companyId: order.companyId, warehouseId: row.warehouseId, productId: row.productId, variantId: row.variantId, packageId: row.packageId,
-      employeeId, reserved: -Number(row.quantity), type: "RESERVATION_RELEASE", referenceType: "Order", referenceId: order.id });
+      employeeId, reserved: -Number(row.quantity), allowNegative: true, type: "RESERVATION_RELEASE", referenceType: "Order", referenceId: order.id });
     await tx.stockReservation.update({ where: { id: row.id }, data: { status } });
   }
   await tx.productSerial.updateMany({ where: { companyId: order.companyId, soldOrderId: order.id, status: "RESERVED" }, data: { status: "AVAILABLE", soldOrderId: null } });
@@ -381,7 +382,7 @@ export function createOrderService(prisma) {
             : await consumeTrackedBatches(tx, { companyId, warehouseId: row.warehouseId, product: orderItem.product, variantId: row.variantId, quantity: Number(row.quantity) });
           await tx.orderItem.update({ where: { id: orderItem.id }, data: { fulfilledQty: orderItem.quantity, ...(batchAllocations.length ? { batchAllocations } : {}) } });
           await changeStock(tx, { companyId, warehouseId: row.warehouseId, productId: row.productId, variantId: row.variantId, packageId: row.packageId, employeeId,
-            quantity: -Number(row.quantity), reserved: -Number(row.quantity), type: "SALE", referenceType: "Order", referenceId: id });
+            quantity: -Number(row.quantity), reserved: -Number(row.quantity), allowNegative: true, type: "SALE", referenceType: "Order", referenceId: id });
           await tx.stockReservation.update({ where: { id: row.id }, data: { status: "CONSUMED" } });
         }
         const next = await tx.order.update({ where: { id }, data: { status: "COMPLETED", fulfillmentStatus: "FULFILLED",

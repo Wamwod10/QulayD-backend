@@ -87,7 +87,7 @@ async function consumeReservation(tx, companyId, employeeId, order, reservation,
   }
 
   await changeStock(tx, { companyId, warehouseId: reservation.warehouseId, productId: reservation.productId, variantId: reservation.variantId, packageId: reservation.packageId, employeeId,
-    quantity: -baseQuantity, reserved: -baseQuantity, type: "SALE", referenceType: "Delivery", referenceId: order.id });
+    quantity: -baseQuantity, reserved: -baseQuantity, allowNegative: true, type: "SALE", referenceType: "Delivery", referenceId: order.id });
   const remains = roundQty(Number(reservation.quantity) - baseQuantity);
   await tx.stockReservation.update({ where: { id: reservation.id }, data: { quantity: remains, status: remains === 0 ? "CONSUMED" : "ACTIVE" } });
   await tx.orderItem.update({ where: { id: reservation.orderItemId }, data: {

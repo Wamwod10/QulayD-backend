@@ -1,6 +1,6 @@
 import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors/index.js";
 import { nextDocumentNumber } from "../../shared/documents/index.js";
-import { changeStock } from "../inventory/balances/balance.service.js";
+import { changeStock, resolveAllowNegativeStock } from "../inventory/balances/balance.service.js";
 
 const toCents = (value) => Math.round(Number(value || 0) * 100);
 const fromCents = (value) => value / 100;
@@ -126,9 +126,14 @@ export function createPosService(prisma) {
       await tx.cashbox.update({ where: { id: shift.cashboxId }, data: { balance: input.closingBalance } }); return tx.shift.update({ where: { id: shiftId }, data: { status: "CLOSED", closingBalance: input.closingBalance, difference, closedAt: new Date(), note: input.note || shift.note }, include: { transactions: true, payments: true } });
     }); },
     async sale(companyId, employeeId, input) { return prisma.$transaction(async (tx) => {
-      const resolved = await resolveSale(tx, companyId, input);
-      const shift = resolved.payments.some(({ method }) => method === "CASH") ? await tx.shift.findFirst({ where: { id: input.shiftId, companyId, employeeId, status: "OPEN" } }) : null;
+      const [resolved, allowNegative] = await Promise.all([
+        resolveSale(tx, companyId, input),
+        resolveAllowNegativeStock(tx, companyId),
+      ]);
+      const shift = resolved.payments.some(({ method }) => method === "CASH") ? await tx.shift.findFirst({ where: { id: input.shiftId, companyId, employeeId, status: "OPEN" }, include: { cashbox: true } }) : null;
       if (resolved.payments.some(({ method }) => method === "CASH") && !shift) throw new ValidationError("An open shift is required for cash payment");
+      if (shift?.cashbox?.warehouseId && shift.cashbox.warehouseId !== input.warehouseId) throw new ValidationError("Cash shift belongs to a different warehouse");
+      if (shift?.cashbox?.branchId && resolved.warehouse.branchId && shift.cashbox.branchId !== resolved.warehouse.branchId) throw new ValidationError("Cash shift belongs to a different branch");
       const order = await tx.order.create({ data: { companyId, warehouseId: input.warehouseId, customerId: input.customerId, priceListId: resolved.priceListId,
         createdById: employeeId, number: await nextDocumentNumber(tx, companyId, "ORDER", "ORD"), channel: "POS", status: "COMPLETED",
         fulfillmentStatus: "FULFILLED", deliveryStatus: "DELIVERED", paymentStatus: resolved.creditAmount ? "PARTIALLY_PAID" : "PAID",
@@ -177,7 +182,7 @@ export function createPosService(prisma) {
           await tx.orderItem.update({ where: { id: row.id }, data: { batchAllocations, serialIds: source.serialIds } });
         }
         await changeStock(tx, { companyId, warehouseId: input.warehouseId, productId: row.productId, variantId: row.variantId, packageId: row.packageId,
-          employeeId, quantity: -Number(row.baseQuantity), type: "SALE", referenceType: "Order", referenceId: order.id });
+          employeeId, quantity: -Number(row.baseQuantity), allowNegative, type: "SALE", referenceType: "Order", referenceId: order.id });
       }
       await tx.orderStatusHistory.create({ data: { orderId: order.id, employeeId, status: "COMPLETED", fulfillment: "FULFILLED", delivery: "DELIVERED", note: "POS sale completed" } });
       const settledAmount = resolved.total - resolved.creditAmount;
