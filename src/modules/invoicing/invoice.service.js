@@ -3,6 +3,40 @@ import { nextDocumentNumber } from "../../shared/documents/index.js";
 import { paginationMeta, parsePagination } from "../../shared/pagination/index.js";
 import { INVOICE_INCLUDE } from "./invoice.constants.js";
 
+export async function issueInvoiceInTransaction(tx, companyId, id) {
+  const invoice = await tx.invoice.findFirst({ where: { id, companyId }, include: INVOICE_INCLUDE });
+  if (!invoice) throw new NotFoundError("Invoice not found");
+  if (invoice.status !== "DRAFT") throw new ConflictError("Only draft invoices can be issued");
+  const netTotal = Math.max(0, Number(invoice.total) - Number(invoice.credited || 0));
+  let paid = Number(invoice.paid || 0);
+  let advanceApplied = 0;
+  if (invoice.customerId && paid + 0.01 < netTotal) {
+    const customer = await tx.customer.findFirst({ where: { id: invoice.customerId, companyId }, select: { advance: true } });
+    advanceApplied = Math.min(Number(customer?.advance || 0), Math.max(0, netTotal - paid));
+    if (advanceApplied > 0) {
+      paid += advanceApplied;
+      await tx.customer.update({ where: { id: invoice.customerId }, data: { advance: { decrement: advanceApplied } } });
+    }
+  }
+  const outstanding = Math.max(0, netTotal - paid);
+  const status = outstanding <= 0.01 ? "PAID" : paid > 0 ? "PARTIALLY_PAID" : "ISSUED";
+  const data = await tx.invoice.update({ where: { id }, data: { status, paid, issuedAt: new Date() }, include: INVOICE_INCLUDE });
+  if (outstanding > 0 && invoice.customerId) {
+    await tx.debt.create({ data: { companyId, customerId: invoice.customerId, invoiceId: invoice.id,
+      referenceType: "Invoice", referenceId: invoice.id, original: outstanding, outstanding, dueAt: invoice.dueAt } });
+    await tx.customer.update({ where: { id: invoice.customerId }, data: { balance: { increment: outstanding } } });
+  }
+  await tx.ledgerEntry.createMany({ data: [
+    { companyId, customerId: invoice.customerId, side: "DEBIT", account: "RECEIVABLE", amount: invoice.total, referenceType: "Invoice", referenceId: invoice.id, description: invoice.number },
+    { companyId, customerId: invoice.customerId, side: "CREDIT", account: "SALES", amount: invoice.total, referenceType: "Invoice", referenceId: invoice.id, description: invoice.number },
+    ...(advanceApplied > 0 ? [
+      { companyId, customerId: invoice.customerId, side: "DEBIT", account: "CUSTOMER_ADVANCE", amount: advanceApplied, referenceType: "CustomerAdvanceApplied", referenceId: invoice.id, description: invoice.number },
+      { companyId, customerId: invoice.customerId, side: "CREDIT", account: "RECEIVABLE", amount: advanceApplied, referenceType: "CustomerAdvanceApplied", referenceId: invoice.id, description: invoice.number },
+    ] : []),
+  ] });
+  return data;
+}
+
 export function createInvoiceService(prisma) {
   return {
     async list(companyId, query) {
@@ -30,27 +64,12 @@ export function createInvoiceService(prisma) {
       });
     },
     async issue(companyId, id) {
-      return prisma.$transaction(async (tx) => {
-        const invoice = await tx.invoice.findFirst({ where: { id, companyId }, include: INVOICE_INCLUDE });
-        if (!invoice) throw new NotFoundError("Invoice not found"); if (invoice.status !== "DRAFT") throw new ConflictError("Only draft invoices can be issued");
-        const data = await tx.invoice.update({ where: { id }, data: { status: "ISSUED", issuedAt: new Date() }, include: INVOICE_INCLUDE });
-        const outstanding = Number(invoice.total) - Number(invoice.paid);
-        if (outstanding > 0 && invoice.customerId) {
-          await tx.debt.create({ data: { companyId, customerId: invoice.customerId, invoiceId: invoice.id,
-            original: outstanding, outstanding, dueAt: invoice.dueAt } });
-          await tx.customer.update({ where: { id: invoice.customerId }, data: { balance: { increment: outstanding } } });
-        }
-        await tx.ledgerEntry.createMany({ data: [
-          { companyId, customerId: invoice.customerId, side: "DEBIT", account: "RECEIVABLE", amount: invoice.total, referenceType: "Invoice", referenceId: invoice.id, description: invoice.number },
-          { companyId, customerId: invoice.customerId, side: "CREDIT", account: "SALES", amount: invoice.total, referenceType: "Invoice", referenceId: invoice.id, description: invoice.number },
-        ] });
-        return data;
-      }, { isolationLevel: "Serializable" });
+      return prisma.$transaction((tx) => issueInvoiceInTransaction(tx, companyId, id), { isolationLevel: "Serializable" });
     },
     async void(companyId, id) {
       return prisma.$transaction(async (tx) => {
         const invoice = await tx.invoice.findFirst({ where: { id, companyId }, include: { debts: true } });
-        if (!invoice) throw new NotFoundError("Invoice not found"); if (Number(invoice.paid) > 0 || invoice.status === "VOID") throw new ConflictError("Paid or void invoice cannot be voided");
+        if (!invoice) throw new NotFoundError("Invoice not found"); if (Number(invoice.paid) > 0 || Number(invoice.credited || 0) > 0 || invoice.status === "VOID") throw new ConflictError("Paid, credited or void invoice cannot be voided");
         const outstanding = invoice.debts.reduce((sum, debt) => sum + Number(debt.outstanding), 0);
         await tx.debt.updateMany({ where: { invoiceId: id }, data: { outstanding: 0, settledAt: new Date() } });
         if (invoice.customerId && outstanding) await tx.customer.update({ where: { id: invoice.customerId }, data: { balance: { decrement: outstanding } } });

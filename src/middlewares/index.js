@@ -4,7 +4,7 @@ export { createApiRateLimiter } from "./rate-limit.middleware.js";
 export { requestIdMiddleware } from "./request-id.middleware.js";
 export { validate } from "./validate.middleware.js";
 export { createAuthenticate } from "./auth.middleware.js";
-export { requireModule } from "./module-access.middleware.js";
+export { requireAnyModule, requireModule } from "./module-access.middleware.js";
 export { requireAnyPermission, requirePermission, requireRole } from "./permission.middleware.js";
 export { tenantContext, tenantWhere } from "./tenant.middleware.js";
 export { createIdempotencyMiddleware } from "./idempotency.middleware.js";

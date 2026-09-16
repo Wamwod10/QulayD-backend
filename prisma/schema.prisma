@@ -537,6 +537,7 @@ model ProductVariant {
   product       Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
   barcodes      ProductBarcode[]
   packages      ProductPackage[]
+  prices        ProductPrice[]
   batches       ProductBatch[]
   serials       ProductSerial[]
   orderItems    OrderItem[]
@@ -545,6 +546,7 @@ model ProductVariant {
   heldCartItems   HeldCartItem[]
   transferItems   StockTransferItem[]
   adjustmentItems StockAdjustmentItem[]
+  countItems      InventoryCountItem[]
   stocks          WarehouseStock[]
 
   @@unique([companyId, sku])
@@ -571,6 +573,7 @@ model ProductPackage {
   parent             ProductPackage?    @relation("PackageTree", fields: [parentPackageId], references: [id], onDelete: Restrict)
   children           ProductPackage[]   @relation("PackageTree")
   barcodes           ProductBarcode[]
+  prices             ProductPrice[]
   orderItems         OrderItem[]
   receiptItems       GoodsReceiptItem[]
   returnItems        ReturnItem[]
@@ -653,20 +656,27 @@ model PriceList {
 }
 
 model ProductPrice {
-  id          String    @id @default(uuid()) @db.Uuid
-  companyId   String    @db.Uuid
-  priceListId String    @db.Uuid
-  productId   String    @db.Uuid
-  price       Decimal   @db.Decimal(18, 2)
-  validFrom   DateTime  @default(now())
+  id          String          @id @default(uuid()) @db.Uuid
+  companyId   String          @db.Uuid
+  priceListId String          @db.Uuid
+  productId   String          @db.Uuid
+  variantId   String?         @db.Uuid
+  packageId   String?         @db.Uuid
+  scopeKey    String          @default("BASE")
+  price       Decimal         @db.Decimal(18, 2)
+  validFrom   DateTime        @default(now())
   validTo     DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  priceList   PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
-  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  priceList   PriceList       @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  product     Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant     ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  package     ProductPackage? @relation(fields: [packageId], references: [id], onDelete: Cascade)
 
-  @@unique([priceListId, productId, validFrom])
-  @@index([companyId, productId, validTo])
+  @@unique([priceListId, productId, scopeKey, validFrom])
+  @@index([companyId, productId, scopeKey, validTo])
+  @@index([variantId])
+  @@index([packageId])
 }
 
 model WarehouseStock {
@@ -747,6 +757,7 @@ model StockTransfer {
   note              String?
   approvedById      String?             @db.Uuid
   approvedAt        DateTime?
+  dispatchedAt      DateTime?
   completedAt       DateTime?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
@@ -765,8 +776,10 @@ model StockTransferItem {
   variantId  String?         @db.Uuid
   packageId  String?         @db.Uuid
   batchId    String?         @db.Uuid
-  quantity   Decimal         @db.Decimal(18, 3)
-  received   Decimal         @default(0) @db.Decimal(18, 3)
+  quantity           Decimal         @db.Decimal(18, 3)
+  displayQuantity    Decimal?        @db.Decimal(18, 3)
+  conversionToBase   Decimal         @default(1) @db.Decimal(18, 6)
+  received           Decimal         @default(0) @db.Decimal(18, 3)
   serialIds  Json            @default("[]")
   transfer   StockTransfer   @relation(fields: [transferId], references: [id], onDelete: Cascade)
   product    Product         @relation(fields: [productId], references: [id])
@@ -798,16 +811,20 @@ model InventoryCount {
 }
 
 model InventoryCountItem {
-  id         String         @id @default(uuid()) @db.Uuid
-  countId    String         @db.Uuid
-  productId  String         @db.Uuid
-  expected   Decimal        @db.Decimal(18, 3)
-  counted    Decimal?       @db.Decimal(18, 3)
-  difference Decimal?       @db.Decimal(18, 3)
-  count      InventoryCount @relation(fields: [countId], references: [id], onDelete: Cascade)
-  product    Product        @relation(fields: [productId], references: [id])
+  id         String          @id @default(uuid()) @db.Uuid
+  countId    String          @db.Uuid
+  productId  String          @db.Uuid
+  variantId  String?         @db.Uuid
+  stockKey   String          @default("BASE")
+  expected   Decimal         @db.Decimal(18, 3)
+  counted    Decimal?        @db.Decimal(18, 3)
+  difference Decimal?        @db.Decimal(18, 3)
+  count      InventoryCount  @relation(fields: [countId], references: [id], onDelete: Cascade)
+  product    Product         @relation(fields: [productId], references: [id])
+  variant    ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
 
-  @@unique([countId, productId])
+  @@unique([countId, productId, stockKey])
+  @@index([variantId])
 }
 
 model StockAdjustment {
@@ -834,7 +851,9 @@ model StockAdjustmentItem {
   variantId      String?         @db.Uuid
   packageId      String?         @db.Uuid
   batchId        String?         @db.Uuid
-  quantity       Decimal         @db.Decimal(18, 3)
+  quantity         Decimal         @db.Decimal(18, 3)
+  displayQuantity  Decimal?        @db.Decimal(18, 3)
+  conversionToBase Decimal         @default(1) @db.Decimal(18, 6)
   unitCost       Decimal?        @db.Decimal(18, 2)
   serialIds      Json            @default("[]")
   serialNumbers  Json            @default("[]")
@@ -866,6 +885,7 @@ model Customer {
   taxId              String?
   creditLimit        Decimal             @default(0) @db.Decimal(18, 2)
   balance            Decimal             @default(0) @db.Decimal(18, 2)
+  advance            Decimal             @default(0) @db.Decimal(18, 2)
   status             RecordStatus        @default(ACTIVE)
   metadata           Json                @default("{}")
   createdAt          DateTime            @default(now())
@@ -900,6 +920,7 @@ model Supplier {
   address       String?
   taxId         String?
   balance       Decimal        @default(0) @db.Decimal(18, 2)
+  advance       Decimal        @default(0) @db.Decimal(18, 2)
   status        RecordStatus   @default(ACTIVE)
   metadata      Json           @default("{}")
   createdAt     DateTime       @default(now())
@@ -1014,6 +1035,7 @@ model OrderItem {
   variant          ProductVariant?    @relation(fields: [variantId], references: [id], onDelete: SetNull)
   package          ProductPackage?    @relation(fields: [packageId], references: [id], onDelete: SetNull)
   reservations     StockReservation[]
+  pickListItems    PickListItem[]
   returnItems      ReturnItem[]
 
   @@index([orderId])
@@ -1041,6 +1063,7 @@ model PickList {
   number           String
   status           DocumentStatus @default(DRAFT)
   progress         Int            @default(0)
+  exception        String?
   startedAt        DateTime?
   pickedAt         DateTime?
   createdAt        DateTime       @default(now())
@@ -1048,10 +1071,34 @@ model PickList {
   order            Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
   pickerEmployeeId String?        @db.Uuid
   pickerEmployee   Employee?      @relation(fields: [pickerEmployeeId], references: [id], onDelete: SetNull)
+  items            PickListItem[]
 
   @@unique([companyId, number])
   @@index([companyId, status])
   @@index([pickerEmployeeId])
+}
+
+model PickListItem {
+  id                   String    @id @default(uuid()) @db.Uuid
+  companyId            String    @db.Uuid
+  pickListId           String    @db.Uuid
+  orderItemId          String    @db.Uuid
+  requiredQuantity     Decimal   @db.Decimal(18, 3)
+  pickedQuantity       Decimal   @default(0) @db.Decimal(18, 3)
+  shortageQuantity     Decimal   @default(0) @db.Decimal(18, 3)
+  requiredBaseQuantity Decimal   @db.Decimal(18, 3)
+  pickedBaseQuantity   Decimal   @default(0) @db.Decimal(18, 3)
+  shortageBaseQuantity Decimal   @default(0) @db.Decimal(18, 3)
+  serialIds            Json      @default("[]")
+  batchAllocations     Json      @default("[]")
+  note                 String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  pickList             PickList  @relation(fields: [pickListId], references: [id], onDelete: Cascade)
+  orderItem            OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+
+  @@unique([pickListId, orderItemId])
+  @@index([companyId, pickListId])
 }
 
 model Packing {
@@ -1122,6 +1169,7 @@ model DeliveryTrip {
   status           DocumentStatus @default(DRAFT)
   plannedKm        Decimal?       @db.Decimal(10, 2)
   plannedMinutes   Int?
+  plannedDate      DateTime?
   startedAt        DateTime?
   completedAt      DateTime?
   createdAt        DateTime       @default(now())
@@ -1170,6 +1218,7 @@ model Invoice {
   discount    Decimal             @default(0) @db.Decimal(18, 2)
   total       Decimal             @default(0) @db.Decimal(18, 2)
   paid        Decimal             @default(0) @db.Decimal(18, 2)
+  credited    Decimal             @default(0) @db.Decimal(18, 2)
   dueAt       DateTime?
   issuedAt    DateTime?
   createdAt   DateTime            @default(now())
@@ -1213,6 +1262,7 @@ model Payment {
   shiftId         String?                 @db.Uuid
   number          String
   method          PaymentMethod
+  methodCode      String?
   status          PaymentStatus           @default(PENDING)
   amount          Decimal                 @db.Decimal(18, 2)
   currency        String                  @default("UZS")
@@ -1236,6 +1286,7 @@ model Payment {
   @@index([companyId, status, createdAt])
   @@index([companyId, customerId, createdAt])
   @@index([companyId, supplierId, createdAt])
+  @@index([companyId, methodCode, createdAt])
 }
 
 model PaymentAllocation {
@@ -1272,6 +1323,8 @@ model Debt {
   customerId  String?                 @db.Uuid
   supplierId  String?                 @db.Uuid
   invoiceId   String?                 @db.Uuid
+  referenceType String?
+  referenceId   String?
   original    Decimal                 @db.Decimal(18, 2)
   outstanding Decimal                 @db.Decimal(18, 2)
   dueAt       DateTime?
@@ -1286,6 +1339,7 @@ model Debt {
   @@index([companyId, customerId, outstanding])
   @@index([companyId, supplierId, outstanding])
   @@index([companyId, dueAt])
+  @@index([companyId, referenceType, referenceId])
 }
 
 model DebtPaymentAllocation {

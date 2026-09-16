@@ -15,7 +15,7 @@ const defaultSettings = () => ({
   modules: Object.fromEntries(MODULES.map((module) => [module, !WORKSPACE_MODULES.includes(module)])),
   employeeWorkspaces: Object.fromEntries(WORKSPACE_MODULES.map((module) => [module, false])),
   sales: { allowNegativeStock: false, autoConfirmOrders: false },
-  inventory: { allowNegativeStock: false, reservations: true, lowStockAlerts: true, requireAdjustmentApproval: true },
+  inventory: { allowNegativeStock: false, reservations: true, lowStockAlerts: true, requireAdjustmentApproval: true, requireTransferApproval: true },
   notifications: { lowStock: true, overdueDebt: true, payment: true, newOrder: true },
 });
 

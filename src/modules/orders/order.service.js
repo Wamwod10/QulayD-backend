@@ -7,7 +7,8 @@ import { nextOrderNumber } from "./order-number.service.js";
 const include = {
   customer: true, warehouse: true, agent: { select: { id: true, name: true, phone: true } },
   createdBy: { select: { id: true, name: true } }, items: { include: { product: { include: { unit: true, barcodes: true } }, variant: true, package: true } },
-  reservations: true, history: { orderBy: { createdAt: "asc" } }, pickLists: true, packing: true,
+  reservations: true, history: { orderBy: { createdAt: "asc" } },
+  pickLists: { include: { items: { include: { orderItem: { include: { product: true, variant: true, package: true } } } }, pickerEmployee: { select: { id: true, name: true } } } }, packing: true,
   deliveries: true, invoices: true, payments: true, receipt: true,
 };
 
@@ -47,19 +48,58 @@ async function attachOrderTracking(tx, companyId, orders) {
   return orders;
 }
 
-function totals(input) {
-  const rows = input.items.map((row) => ({ ...row, discount: row.discount || 0, tax: row.tax || 0,
-    total: row.quantity * row.unitPrice - (row.discount || 0) + (row.tax || 0) }));
-  const subtotal = rows.reduce((sum, row) => sum + row.quantity * row.unitPrice, 0);
-  const itemDiscount = rows.reduce((sum, row) => sum + row.discount, 0);
-  const itemTax = rows.reduce((sum, row) => sum + row.tax, 0);
-  const discount = itemDiscount + (input.discount || 0); const tax = itemTax + (input.tax || 0);
-  return { rows, subtotal, discount, tax, total: subtotal - discount + tax };
+function roundMoney(value) { return Math.round((Number(value) + Number.EPSILON) * 100) / 100; }
+function roundQty(value) { return Math.round((Number(value) + Number.EPSILON) * 1000) / 1000; }
+function priceScopeKey({ variantId, packageId }) {
+  if (packageId) return `PACKAGE:${packageId}`;
+  if (variantId) return `VARIANT:${variantId}`;
+  return "BASE";
 }
 
-async function resolveItems(tx, companyId, items) {
+function totals(input) {
+  const rows = input.items.map((row) => {
+    const gross = roundMoney(Number(row.quantity) * Number(row.unitPrice));
+    const discount = roundMoney(row.discount || 0); const tax = roundMoney(row.tax || 0);
+    if (discount > gross + 1e-9) throw new ValidationError("Item discount cannot exceed item subtotal", { productId: row.productId, gross, discount });
+    const total = roundMoney(gross - discount + tax);
+    if (total < -1e-9) throw new ValidationError("Order item total cannot be negative", { productId: row.productId });
+    return { ...row, discount, tax, total };
+  });
+  const subtotal = roundMoney(rows.reduce((sum, row) => sum + Number(row.quantity) * Number(row.unitPrice), 0));
+  const itemDiscount = roundMoney(rows.reduce((sum, row) => sum + Number(row.discount), 0));
+  const itemTax = roundMoney(rows.reduce((sum, row) => sum + Number(row.tax), 0));
+  const orderDiscount = roundMoney(input.discount || 0); const orderTax = roundMoney(input.tax || 0);
+  if (orderDiscount > subtotal - itemDiscount + 1e-9) throw new ValidationError("Order discount cannot exceed remaining merchandise subtotal");
+  const discount = roundMoney(itemDiscount + orderDiscount); const tax = roundMoney(itemTax + orderTax);
+  const total = roundMoney(subtotal - discount + tax);
+  if (total < -1e-9) throw new ValidationError("Order total cannot be negative");
+  return { rows, subtotal, discount, tax, total };
+}
+
+async function resolvePriceLists(tx, companyId, input) {
+  const customer = input.customerId ? await tx.customer.findFirst({ where: { id: input.customerId, companyId, deletedAt: null }, select: { metadata: true } }) : null;
+  const requestedId = input.priceListId || customer?.metadata?.priceListId || null;
+  const [requested, defaultList] = await Promise.all([
+    requestedId ? tx.priceList.findFirst({ where: { id: requestedId, companyId, status: "ACTIVE" } }) : null,
+    tx.priceList.findFirst({ where: { companyId, status: "ACTIVE", isDefault: true }, orderBy: { createdAt: "asc" } }),
+  ]);
+  if (requestedId && !requested) throw new ValidationError("Selected price list is not active or does not belong to company");
+  const effective = requested || defaultList;
+  if (!effective) throw new ValidationError("At least one active default price list is required before creating a sale order");
+  return { effective, defaultList };
+}
+
+function activePrice(prices, priceListId, scopeKey) {
+  const now = Date.now();
+  return prices
+    .filter((entry) => entry.priceListId === priceListId && entry.scopeKey === scopeKey
+      && new Date(entry.validFrom).getTime() <= now && (!entry.validTo || new Date(entry.validTo).getTime() > now))
+    .sort((a, b) => new Date(b.validFrom) - new Date(a.validFrom))[0];
+}
+
+async function resolveItems(tx, companyId, items, pricing) {
   const products = await tx.product.findMany({ where: { companyId, id: { in: [...new Set(items.map((row) => row.productId))] }, deletedAt: null, status: "ACTIVE" },
-    include: { unit: true, variants: true, packages: true } });
+    include: { unit: true, variants: true, packages: true, prices: true } });
   const byId = new Map(products.map((row) => [row.id, row]));
   return items.map((row) => {
     const product = byId.get(row.productId);
@@ -70,9 +110,19 @@ async function resolveItems(tx, companyId, items) {
     if (activeVariants.length && !variant) throw new ValidationError("Variant is required for this product", { productId: row.productId });
     if (productPackage?.variantId && productPackage.variantId !== variant?.id) throw new ValidationError("Package does not belong to selected variant", { productId: row.productId, packageId: row.packageId });
     const conversionToBase = Number(productPackage?.conversionToBase || 1);
-    const baseQuantity = Math.round(row.quantity * conversionToBase * 1000) / 1000;
+    const baseQuantity = roundQty(Number(row.quantity) * conversionToBase);
     if (product.trackSerial && (!Number.isInteger(baseQuantity) || baseQuantity <= 0)) throw new ValidationError("Serialized products require a whole base-unit quantity", { productId: row.productId });
-    return { ...row, variantId: variant?.id, packageId: productPackage?.id, baseQuantity, conversionToBase,
+    const scope = priceScopeKey({ variantId: variant?.id, packageId: productPackage?.id });
+    const effectiveListId = pricing.effective.id;
+    const fallbackListId = pricing.defaultList?.id && pricing.defaultList.id !== effectiveListId ? pricing.defaultList.id : null;
+    const priceEntry = activePrice(product.prices, effectiveListId, scope)
+      || activePrice(product.prices, effectiveListId, "BASE")
+      || (fallbackListId ? activePrice(product.prices, fallbackListId, scope) : null)
+      || (fallbackListId ? activePrice(product.prices, fallbackListId, "BASE") : null);
+    if (!priceEntry) throw new ValidationError("Product has no active price in the selected/default price list", {
+      productId: row.productId, variantId: variant?.id || null, packageId: productPackage?.id || null, priceListId: effectiveListId,
+    });
+    return { ...row, unitPrice: Number(priceEntry.price), variantId: variant?.id, packageId: productPackage?.id, baseQuantity, conversionToBase,
       productName: product.name, sku: variant?.sku || product.sku, unitName: product.unit.shortName,
       variantName: variant?.name, packageName: productPackage?.name };
   });
@@ -241,6 +291,14 @@ async function release(tx, order, employeeId, status = "RELEASED") {
       employeeId, reserved: -Number(row.quantity), allowNegative: true, type: "RESERVATION_RELEASE", referenceType: "Order", referenceId: order.id });
     await tx.stockReservation.update({ where: { id: row.id }, data: { status } });
   }
+  const pickedLines = await tx.pickListItem.findMany({ where: { companyId: order.companyId, pickList: { orderId: order.id } }, select: { batchAllocations: true } });
+  for (const line of pickedLines) {
+    for (const allocation of Array.isArray(line.batchAllocations) ? line.batchAllocations : []) {
+      if (!allocation?.batchId || Number(allocation.quantity || 0) <= 0) continue;
+      const batch = await tx.productBatch.findFirst({ where: { id: allocation.batchId, companyId: order.companyId } });
+      if (batch) await tx.productBatch.update({ where: { id: batch.id }, data: { reserved: { decrement: Math.min(Number(batch.reserved), Number(allocation.quantity)) } } });
+    }
+  }
   await tx.productSerial.updateMany({ where: { companyId: order.companyId, soldOrderId: order.id, status: "RESERVED" }, data: { status: "AVAILABLE", soldOrderId: null } });
 }
 
@@ -250,13 +308,41 @@ async function assertReferences(tx, companyId, input) {
     tx.warehouse.count({ where: { id: input.warehouseId, companyId, deletedAt: null } }),
     tx.product.count({ where: { id: { in: productIds }, companyId, deletedAt: null, status: "ACTIVE" } }),
     input.customerId ? tx.customer.count({ where: { id: input.customerId, companyId, deletedAt: null } }) : 1,
-    input.agentId ? tx.employee.count({ where: { id: input.agentId, companyId, deletedAt: null, status: "ACTIVE" } }) : 1,
+    input.agentId ? tx.employee.count({ where: { id: input.agentId, companyId, deletedAt: null, status: "ACTIVE", modules: { some: { module: "agent_workspace", enabled: true } } } }) : 1,
     input.branchId ? tx.branch.count({ where: { id: input.branchId, companyId, deletedAt: null } }) : 1,
     input.priceListId ? tx.priceList.count({ where: { id: input.priceListId, companyId, status: "ACTIVE" } }) : 1,
   ]);
   if ([warehouse, customer, agent, branch, priceList].some((count) => count !== 1) || products !== productIds.length) {
     throw new ValidationError("Invalid company resource reference");
   }
+}
+
+async function companySettings(tx, companyId) {
+  const row = await tx.settings.findUnique({ where: { companyId }, select: { data: true } });
+  return row?.data && typeof row.data === "object" ? row.data : {};
+}
+
+async function employeeRoleCodes(tx, companyId, employeeId) {
+  const employee = await tx.employee.findFirst({ where: { id: employeeId, companyId, deletedAt: null },
+    select: { roles: { select: { role: { select: { code: true } } } } } });
+  return new Set((employee?.roles || []).map((entry) => entry.role.code));
+}
+
+async function confirmOrderTransaction(tx, companyId, id, employeeId, note = "Order confirmed and stock reserved") {
+  const order = await tx.order.findFirst({ where: { id, companyId }, include });
+  if (!order) throw new NotFoundError("Order not found");
+  if (!["DRAFT", "PENDING_APPROVAL"].includes(order.status)) throw new ConflictError("Order cannot be confirmed");
+  await reserve(tx, order, employeeId);
+  const next = await tx.order.update({ where: { id }, data: { status: "CONFIRMED", fulfillmentStatus: "RESERVED", confirmedAt: new Date(),
+    pickLists: { create: { companyId, number: await nextDocumentNumber(tx, companyId, "PICK_LIST", "PICK"), status: "APPROVED",
+      items: { create: order.items.map((item) => ({ companyId, orderItemId: item.id,
+        requiredQuantity: Number(item.quantity), requiredBaseQuantity: Number(item.baseQuantity ?? item.quantity) })) } } } }, include });
+  await addHistory(tx, next, employeeId, note);
+  return next;
+}
+
+export async function approveOrderInTransaction(tx, companyId, orderId, employeeId, note) {
+  return confirmOrderTransaction(tx, companyId, orderId, employeeId, note || "Owner approved order");
 }
 
 export function createOrderService(prisma) {
@@ -283,15 +369,27 @@ export function createOrderService(prisma) {
     find,
     async create(companyId, employeeId, input) {
       return prisma.$transaction(async (tx) => {
-        await assertReferences(tx, companyId, input); const calculated = totals({ ...input, items: await resolveItems(tx, companyId, input.items) });
+        await assertReferences(tx, companyId, input);
+        const pricing = await resolvePriceLists(tx, companyId, input);
+        const calculated = totals({ ...input, items: await resolveItems(tx, companyId, input.items, pricing) });
+        const [settings, roles] = await Promise.all([companySettings(tx, companyId), employeeRoleCodes(tx, companyId, employeeId)]);
+        const requireOwnerApproval = settings?.sales?.requireOwnerApprovalForAdminOrders === true && roles.has("ADMIN") && !roles.has("OWNER");
         const order = await tx.order.create({ data: {
           companyId, createdById: employeeId, branchId: input.branchId, warehouseId: input.warehouseId,
-          customerId: input.customerId, priceListId: input.priceListId, agentId: input.agentId,
+          customerId: input.customerId, priceListId: pricing.effective.id, agentId: input.agentId,
           channel: input.channel, currency: input.currency, note: input.note, deliveryAddress: input.deliveryAddress,
-          number: await nextOrderNumber(tx, companyId), subtotal: calculated.subtotal, discount: calculated.discount,
+          number: await nextOrderNumber(tx, companyId), status: requireOwnerApproval ? "PENDING_APPROVAL" : "DRAFT",
+          subtotal: calculated.subtotal, discount: calculated.discount,
           tax: calculated.tax, total: calculated.total, items: { create: calculated.rows },
         }, include });
-        await addHistory(tx, order, employeeId, "Order created"); return order;
+        await addHistory(tx, order, employeeId, requireOwnerApproval ? "Order created and waiting for Owner approval" : "Order created");
+        if (requireOwnerApproval) {
+          await tx.approval.create({ data: { companyId, requestedById: employeeId, entity: "Order", entityId: order.id,
+            action: "CONFIRM_ORDER", status: "PENDING_APPROVAL", payload: { number: order.number, total: Number(order.total) } } });
+          return order;
+        }
+        if (settings?.sales?.autoConfirmOrders === true) return confirmOrderTransaction(tx, companyId, order.id, employeeId, "Order auto-confirmed and stock reserved");
+        return order;
       });
     },
     async update(companyId, id, employeeId, input) {
@@ -312,13 +410,15 @@ export function createOrderService(prisma) {
           tax: input.tax === undefined ? Number(current.tax) - current.items.reduce((sum, row) => sum + Number(row.tax), 0) : input.tax,
         };
         await assertReferences(tx, companyId, merged);
-        if (input.items) merged.items = await resolveItems(tx, companyId, merged.items);
+        const pricing = await resolvePriceLists(tx, companyId, merged);
+        merged.priceListId = pricing.effective.id;
+        merged.items = await resolveItems(tx, companyId, merged.items, pricing);
         const calculated = totals(merged);
         const data = {
-          branchId: merged.branchId, customerId: merged.customerId, priceListId: merged.priceListId, agentId: merged.agentId,
+          branchId: merged.branchId, customerId: merged.customerId, priceListId: pricing.effective.id, agentId: merged.agentId,
           channel: input.channel, currency: input.currency, note: input.note, deliveryAddress: input.deliveryAddress,
           subtotal: calculated.subtotal, discount: calculated.discount, tax: calculated.tax, total: calculated.total,
-          ...(input.items ? { items: { deleteMany: {}, create: calculated.rows } } : {}),
+          items: { deleteMany: {}, create: calculated.rows },
         };
         const order = await tx.order.update({ where: { id }, data, include });
         await addHistory(tx, order, employeeId, "Draft order updated");
@@ -327,12 +427,16 @@ export function createOrderService(prisma) {
     },
     async confirm(companyId, id, employeeId, note) {
       return prisma.$transaction(async (tx) => {
-        const order = await find(companyId, id, tx);
-        if (!["DRAFT", "PENDING_APPROVAL"].includes(order.status)) throw new ConflictError("Order cannot be confirmed");
-        await reserve(tx, order, employeeId);
-        const next = await tx.order.update({ where: { id }, data: { status: "CONFIRMED", fulfillmentStatus: "RESERVED", confirmedAt: new Date(),
-          pickLists: { create: { companyId, number: await nextDocumentNumber(tx, companyId, "PICK_LIST", "PICK"), status: "APPROVED" } } }, include });
-        await addHistory(tx, next, employeeId, note || "Order confirmed and stock reserved"); return next;
+        const current = await tx.order.findFirst({ where: { id, companyId }, select: { status: true } });
+        if (!current) throw new NotFoundError("Order not found");
+        if (current.status === "PENDING_APPROVAL") {
+          const roles = await employeeRoleCodes(tx, companyId, employeeId);
+          if (!roles.has("OWNER")) throw new ConflictError("This order requires Owner approval");
+        }
+        const next = await confirmOrderTransaction(tx, companyId, id, employeeId, note || "Order confirmed and stock reserved");
+        if (current.status === "PENDING_APPROVAL") await tx.approval.updateMany({ where: { companyId, entity: "Order", entityId: id, status: "PENDING_APPROVAL" },
+          data: { status: "APPROVED", reviewedById: employeeId, reviewedAt: new Date(), reason: note || "Owner approved order" } });
+        return next;
       }, { isolationLevel: "Serializable" });
     },
     async startPicking(companyId, id, employeeId, note) {
@@ -346,10 +450,31 @@ export function createOrderService(prisma) {
     async completePicking(companyId, id, employeeId, note) {
       return prisma.$transaction(async (tx) => {
         const order = await find(companyId, id, tx); if (order.fulfillmentStatus !== "PICKING") throw new ConflictError("Picking is not in progress");
-        await tx.pickList.updateMany({ where: { orderId: id }, data: { status: "COMPLETED", progress: 100, pickedAt: new Date() } });
+        const pickList = await tx.pickList.findFirst({ where: { companyId, orderId: id, status: "IN_PROGRESS" }, include: { items: { include: { orderItem: { include: { product: true } } } } } });
+        if (!pickList) throw new ConflictError("Active pick list was not found");
+        const incomplete = pickList.items.filter((line) => Math.abs(Number(line.requiredBaseQuantity) - Number(line.pickedBaseQuantity)) > 1e-9);
+        const shortages = pickList.items.filter((line) => Number(line.shortageBaseQuantity) > 1e-9);
+        if (shortages.length) throw new ConflictError("Picking has shortages that must be resolved before completion", {
+          orderItemIds: shortages.map((line) => line.orderItemId),
+        });
+        if (incomplete.length) throw new ConflictError("All pick-list lines must be physically picked before completion", {
+          orderItemIds: incomplete.map((line) => line.orderItemId),
+        });
+        for (const line of pickList.items) {
+          if (line.orderItem.product.trackSerial) {
+            const ids = Array.isArray(line.serialIds) ? line.serialIds : [];
+            if (ids.length !== Number(line.requiredBaseQuantity)) throw new ConflictError("Serialized pick line is missing scanned serial / IMEI units", { orderItemId: line.orderItemId });
+          }
+          if ((line.orderItem.product.trackLot || line.orderItem.product.trackExpiry) && Number(line.requiredBaseQuantity) > 0) {
+            const allocations = Array.isArray(line.batchAllocations) ? line.batchAllocations : [];
+            const allocated = roundQty(allocations.reduce((sum, row) => sum + Number(row.quantity || 0), 0));
+            if (Math.abs(allocated - Number(line.requiredBaseQuantity)) > 1e-9) throw new ConflictError("Tracked pick line is missing lot/batch allocation", { orderItemId: line.orderItemId });
+          }
+        }
+        await tx.pickList.update({ where: { id: pickList.id }, data: { status: "COMPLETED", progress: 100, exception: null, pickedAt: new Date() } });
         const next = await tx.order.update({ where: { id }, data: { fulfillmentStatus: "PICKED" }, include });
         await addHistory(tx, next, employeeId, note || "Picking completed"); return next;
-      });
+      }, { isolationLevel: "Serializable" });
     },
     async pack(companyId, id, employeeId, note) {
       return prisma.$transaction(async (tx) => {

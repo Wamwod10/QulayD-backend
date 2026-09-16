@@ -197,49 +197,129 @@ export function createReturnService(prisma) {
       if (!doc) throw new NotFoundError("Return not found");
       if (doc.status !== "RECEIVED") throw new ConflictError("Return must be received before refund");
 
-      const invoiceIds = (await tx.invoice.findMany({ where: { companyId, orderId: doc.orderId }, select: { id: true } })).map(({ id: invoiceId }) => invoiceId);
-      const debts = invoiceIds.length ? await tx.debt.findMany({
-        where: { companyId, invoiceId: { in: invoiceIds }, customerId: doc.customerId || undefined, outstanding: { gt: 0 } },
-        orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
-      }) : [];
-      let remaining = Number(doc.total);
+      const invoices = await tx.invoice.findMany({ where: { companyId, orderId: doc.orderId, status: { not: "VOID" } },
+        include: { debts: { where: { outstanding: { gt: 0 } }, orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }] } },
+        orderBy: [{ issuedAt: "asc" }, { createdAt: "asc" }] });
+      let remainingCredit = Number(doc.total);
       let creditOffset = 0;
-      for (const debt of debts) {
-        if (remaining <= 0.009) break;
-        const applied = Math.min(remaining, Number(debt.outstanding));
-        if (applied <= 0) continue;
-        const outstanding = Math.max(0, Number(debt.outstanding) - applied);
-        await tx.debt.update({ where: { id: debt.id }, data: { outstanding, settledAt: outstanding <= 0.009 ? new Date() : null } });
-        remaining -= applied;
-        creditOffset += applied;
+      let advanceRestored = 0;
+      let payoutAmount = 0;
+
+      for (const invoice of invoices) {
+        if (remainingCredit <= 0.009) break;
+        const netBefore = Math.max(0, Number(invoice.total) - Number(invoice.credited || 0));
+        const credit = Math.min(remainingCredit, netBefore);
+        if (credit <= 0.009) continue;
+        const oldOutstanding = Math.max(0, netBefore - Number(invoice.paid || 0));
+        const debtPart = Math.min(credit, oldOutstanding);
+        let paidPart = Math.max(0, credit - debtPart);
+
+        let debtRemaining = debtPart;
+        for (const debt of invoice.debts) {
+          if (debtRemaining <= 0.009) break;
+          const applied = Math.min(debtRemaining, Number(debt.outstanding));
+          const outstanding = Math.max(0, Number(debt.outstanding) - applied);
+          await tx.debt.update({ where: { id: debt.id }, data: { outstanding, settledAt: outstanding <= 0.009 ? new Date() : null } });
+          debtRemaining -= applied;
+          creditOffset += applied;
+        }
+        if (debtRemaining > 0.01) throw new ConflictError("Invoice debt records are inconsistent with invoice outstanding", { invoiceId: invoice.id, debtRemaining });
+
+        let restoredFromAdvance = 0;
+        if (paidPart > 0 && doc.customerId) {
+          const [advanceApplied, priorRestored] = await Promise.all([
+            tx.ledgerEntry.aggregate({ where: { companyId, referenceType: "CustomerAdvanceApplied", referenceId: invoice.id,
+              account: "CUSTOMER_ADVANCE", side: "DEBIT" }, _sum: { amount: true } }),
+            tx.ledgerEntry.aggregate({ where: { companyId, referenceType: "ReturnAdvanceRestore", description: invoice.id,
+              account: "CUSTOMER_ADVANCE", side: "CREDIT" }, _sum: { amount: true } }),
+          ]);
+          const refundableAdvance = Math.max(0, Number(advanceApplied._sum.amount || 0) - Number(priorRestored._sum.amount || 0));
+          restoredFromAdvance = Math.min(paidPart, refundableAdvance);
+          if (restoredFromAdvance > 0) {
+            await tx.customer.update({ where: { id: doc.customerId }, data: { advance: { increment: restoredFromAdvance } } });
+            advanceRestored += restoredFromAdvance;
+          }
+        }
+        const externalPayout = Math.max(0, paidPart - restoredFromAdvance);
+        payoutAmount += externalPayout;
+        const newCredited = Number(invoice.credited || 0) + credit;
+        const newPaid = Math.max(0, Number(invoice.paid || 0) - paidPart);
+        const adjustedTotal = Math.max(0, Number(invoice.total) - newCredited);
+        const status = adjustedTotal <= 0.009 || newPaid + 0.009 >= adjustedTotal ? "PAID" : newPaid > 0 ? "PARTIALLY_PAID" : "ISSUED";
+        await tx.invoice.update({ where: { id: invoice.id }, data: { credited: newCredited, paid: newPaid, status } });
+        if (restoredFromAdvance > 0) await tx.ledgerEntry.create({ data: { companyId, customerId: doc.customerId,
+          side: "CREDIT", account: "CUSTOMER_ADVANCE", amount: restoredFromAdvance, referenceType: "ReturnAdvanceRestore",
+          referenceId: doc.id, description: invoice.id } });
+        remainingCredit -= credit;
       }
+      if (remainingCredit > 0.01) throw new ConflictError("Return amount exceeds the issued invoice value", { remainingCredit });
       if (doc.customerId && creditOffset > 0) {
-        await tx.customer.update({ where: { id: doc.customerId }, data: { balance: { decrement: creditOffset } } });
+        const customer = await tx.customer.update({ where: { id: doc.customerId }, data: { balance: { decrement: creditOffset } } });
+        if (Number(customer.balance) < -0.01) throw new ConflictError("Customer balance would become inconsistent after return");
       }
 
-      const payoutAmount = Math.max(0, Math.round(remaining * 100) / 100);
+      const originalPayments = await tx.payment.findMany({ where: { companyId, orderId: doc.orderId, status: "CONFIRMED", amount: { gt: 0 } },
+        orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }] });
+      const priorRefunds = await tx.payment.findMany({ where: { companyId, orderId: doc.orderId, status: "REFUNDED", amount: { gt: 0 } } });
+      const refundedByTender = new Map();
+      for (const payment of priorRefunds) {
+        const key = payment.methodCode || payment.method;
+        refundedByTender.set(key, (refundedByTender.get(key) || 0) + Number(payment.amount));
+      }
+      const allocations = [];
+      let payoutRemaining = Math.round(payoutAmount * 100) / 100;
+      for (const payment of originalPayments) {
+        if (payoutRemaining <= 0.009) break;
+        const key = payment.methodCode || payment.method;
+        const used = refundedByTender.get(key) || 0;
+        const available = Math.max(0, Number(payment.amount) - used);
+        const amount = Math.min(payoutRemaining, available);
+        if (amount <= 0.009) continue;
+        allocations.push({ method: payment.method, methodCode: payment.methodCode || payment.method, amount });
+        refundedByTender.set(key, used + amount);
+        payoutRemaining -= amount;
+      }
+      if (payoutRemaining > 0.009) {
+        const methodConfig = input.methodCode
+          ? await tx.paymentMethodConfig.findFirst({ where: { companyId, code: input.methodCode, status: "ACTIVE" } })
+          : await tx.paymentMethodConfig.findFirst({ where: { companyId, method: input.method, status: "ACTIVE" } });
+        if (!methodConfig) throw new ConflictError("Selected refund payment method is disabled or unavailable");
+        allocations.push({ method: methodConfig.method, methodCode: methodConfig.code, amount: payoutRemaining });
+        payoutRemaining = 0;
+      }
+
+      const cashTotal = allocations.filter((row) => row.method === "CASH").reduce((sum, row) => sum + row.amount, 0);
       let shift = null;
-      if (input.method === "CASH" && payoutAmount > 0) {
-        shift = input.shiftId ? await tx.shift.findFirst({ where: { id: input.shiftId, companyId, employeeId, status: "OPEN" } }) : null;
-        if (!shift || Number(shift.expectedCash) + 0.009 < payoutAmount) throw new ConflictError("Open shift with sufficient cash is required");
-        await tx.cashTransaction.create({ data: { companyId, cashboxId: shift.cashboxId, shiftId: shift.id, type: "REFUND", amount: payoutAmount, reference: doc.number, description: input.note } });
-        await tx.shift.update({ where: { id: shift.id }, data: { expectedCash: { decrement: payoutAmount } } });
-        await tx.cashbox.update({ where: { id: shift.cashboxId }, data: { balance: { decrement: payoutAmount } } });
+      if (cashTotal > 0.009) {
+        shift = input.shiftId ? await tx.shift.findFirst({ where: { id: input.shiftId, companyId, employeeId, status: "OPEN" }, include: { cashbox: true } }) : null;
+        if (!shift || shift.cashbox?.warehouseId !== doc.order.warehouseId || Number(shift.expectedCash) + 0.009 < cashTotal) {
+          throw new ConflictError("Refund uchun shu omborga tegishli ochiq smenada yetarli naqd pul kerak", { cashRequired: cashTotal });
+        }
       }
 
-      const payment = payoutAmount > 0 ? await tx.payment.create({ data: {
-        companyId, customerId: doc.customerId, orderId: doc.orderId, employeeId, shiftId: shift?.id,
-        number: await nextDocumentNumber(tx, companyId, "REFUND", "REF"), method: input.method, status: "REFUNDED", amount: payoutAmount,
-        paidAt: new Date(), confirmedAt: new Date(), note: input.note,
-      } }) : null;
-      const ledgerRows = [
+      const payments = [];
+      for (const allocation of allocations) {
+        const payment = await tx.payment.create({ data: { companyId, customerId: doc.customerId, orderId: doc.orderId, employeeId,
+          shiftId: allocation.method === "CASH" ? shift?.id : null, number: await nextDocumentNumber(tx, companyId, "REFUND", "REF"),
+          method: allocation.method, methodCode: allocation.methodCode, status: "REFUNDED", amount: allocation.amount,
+          paidAt: new Date(), confirmedAt: new Date(), note: input.note || `Return ${doc.number}` } });
+        payments.push(payment);
+        if (allocation.method === "CASH") {
+          await tx.cashTransaction.create({ data: { companyId, cashboxId: shift.cashboxId, shiftId: shift.id, type: "REFUND",
+            amount: allocation.amount, reference: doc.number, description: input.note } });
+          await tx.shift.update({ where: { id: shift.id }, data: { expectedCash: { decrement: allocation.amount } } });
+          await tx.cashbox.update({ where: { id: shift.cashboxId }, data: { balance: { decrement: allocation.amount } } });
+        }
+      }
+
+      await tx.ledgerEntry.createMany({ data: [
         { companyId, customerId: doc.customerId, side: "DEBIT", account: "SALES_RETURN", amount: doc.total, referenceType: "Return", referenceId: doc.id },
         ...(creditOffset > 0 ? [{ companyId, customerId: doc.customerId, side: "CREDIT", account: "RECEIVABLE", amount: creditOffset, referenceType: "Return", referenceId: doc.id }] : []),
-        ...(payoutAmount > 0 ? [{ companyId, customerId: doc.customerId, side: "CREDIT", account: input.method === "OTHER" ? "REFUND_PAYABLE" : "CASH_AND_BANK", amount: payoutAmount, referenceType: "Return", referenceId: doc.id }] : []),
-      ];
-      await tx.ledgerEntry.createMany({ data: ledgerRows });
+        ...allocations.map((row) => ({ companyId, customerId: doc.customerId, side: "CREDIT", account: "CASH_AND_BANK", amount: row.amount,
+          referenceType: "Return", referenceId: doc.id, description: row.methodCode })),
+      ] });
       const data = await tx.return.update({ where: { id }, data: { status: "REFUNDED" }, include });
-      return { data, payment, creditOffset, payoutAmount };
+      return { data, payment: payments[0] || null, payments, creditOffset, advanceRestored, payoutAmount: Math.round(payoutAmount * 100) / 100 };
     }, { isolationLevel: "Serializable" }); },
   };
 }

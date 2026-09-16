@@ -17,8 +17,10 @@ export function createSettingsRouter({ prisma }) {
   router.put("/", requirePermission("settings.update"), validate({ body: settingsUpdateSchema }), asyncHandler(async (request, response) => {
     const current = await prisma.settings.findUnique({ where: { companyId: request.tenant.companyId } });
     if (!current || current.version !== request.validated.body.version) throw new ConflictError("Settings were changed by another session");
+    const incoming = request.validated.body.data || {};
+    const normalizedData = { ...incoming, inventory: { ...(incoming.inventory || {}), reservations: true } };
     const result = await prisma.settings.updateMany({ where: { companyId: request.tenant.companyId, version: current.version },
-      data: { data: request.validated.body.data, version: { increment: 1 } } });
+      data: { data: normalizedData, version: { increment: 1 } } });
     if (!result.count) throw new ConflictError("Settings were changed by another session");
     const data = await prisma.settings.findUnique({ where: { companyId: request.tenant.companyId } });
     await writeAudit(prisma, request, { action: "UPDATE", entity: "Settings", entityId: data.id, before: current, after: data });

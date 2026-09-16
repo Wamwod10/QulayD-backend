@@ -37,6 +37,15 @@ async function consumeBatches(tx, { companyId, warehouseId, product, variantId, 
   return allocations;
 }
 
+function activeScopedPrice(prices, priceListId, scopeKey) {
+  if (!priceListId) return null;
+  const now = Date.now();
+  return prices
+    .filter((entry) => entry.priceListId === priceListId && (entry.scopeKey || "BASE") === scopeKey
+      && new Date(entry.validFrom).getTime() <= now && (!entry.validTo || new Date(entry.validTo).getTime() > now))
+    .sort((a, b) => new Date(b.validFrom) - new Date(a.validFrom))[0] || null;
+}
+
 async function resolveSale(tx, companyId, input) {
   const productIds = [...new Set(input.items.map(({ productId }) => productId))];
   const [warehouse, customer, products, defaultPriceList, methodConfigs] = await Promise.all([
@@ -55,6 +64,8 @@ async function resolveSale(tx, companyId, input) {
     : null;
   if (input.priceListId && !configuredPriceList) throw new ValidationError("Selected price list is not active or does not belong to company");
   const effectivePriceListId = configuredPriceList?.id || defaultPriceList?.id || null;
+  if (!effectivePriceListId) throw new ValidationError("At least one active default price list is required before a POS sale");
+  const fallbackPriceListId = defaultPriceList?.id && defaultPriceList.id !== effectivePriceListId ? defaultPriceList.id : null;
   const productMap = new Map(products.map((product) => [product.id, product]));
   const seenLines = new Set();
   const rows = input.items.map((item) => {
@@ -73,8 +84,15 @@ async function resolveSale(tx, companyId, input) {
     const conversionToBase = Number(productPackage?.conversionToBase || 1);
     const baseMillis = Math.round(toMillis(item.quantity) * conversionToBase);
     if (baseMillis <= 0) throw new ValidationError("Base quantity must be positive");
-    const listPrice = product.prices.find((price) => price.priceListId === effectivePriceListId)?.price ?? product.prices[0]?.price;
-    const resolvedPrice = productPackage?.price ?? variant?.price ?? listPrice ?? item.unitPrice ?? 0;
+    const scopeKey = productPackage?.id ? `PACKAGE:${productPackage.id}` : variant?.id ? `VARIANT:${variant.id}` : "BASE";
+    const priceEntry = activeScopedPrice(product.prices, effectivePriceListId, scopeKey)
+      || (scopeKey !== "BASE" ? activeScopedPrice(product.prices, effectivePriceListId, "BASE") : null)
+      || (fallbackPriceListId ? activeScopedPrice(product.prices, fallbackPriceListId, scopeKey) : null)
+      || (fallbackPriceListId && scopeKey !== "BASE" ? activeScopedPrice(product.prices, fallbackPriceListId, "BASE") : null);
+    if (!priceEntry) throw new ValidationError("Product has no active price in the selected/default price list", {
+      productId: product.id, variantId: variant?.id || null, packageId: productPackage?.id || null, priceListId: effectivePriceListId,
+    });
+    const resolvedPrice = Number(priceEntry.price);
     const grossCents = Math.round(toMillis(item.quantity) * toCents(resolvedPrice) / 1000);
     const itemDiscountCents = discountCents(item, grossCents);
     return { productId: product.id, variantId: variant?.id, packageId: productPackage?.id, quantity: item.quantity,
@@ -90,8 +108,8 @@ async function resolveSale(tx, companyId, input) {
   const configByCode = new Map(methodConfigs.map((config) => [config.code, config]));
   const payments = input.payments.map((row) => {
     const config = row.methodCode ? configByCode.get(row.methodCode) : methodConfigs.find((item) => item.method === row.method);
-    if (row.methodCode && !config) throw new ValidationError(`Payment method ${row.methodCode} is not active`);
-    return { ...row, method: config?.method || row.method, methodCode: config?.code || row.method };
+    if (!config) throw new ValidationError(`Payment method ${row.methodCode || row.method} is not active`);
+    return { ...row, method: config.method, methodCode: config.code };
   });
   const paidCents = payments.reduce((sum, row) => sum + toCents(row.amount), 0);
   if (paidCents !== totalCents) throw new ValidationError("Payment total must equal sale total", { expected: fromCents(totalCents), actual: fromCents(paidCents) });
@@ -118,7 +136,21 @@ export function createPosService(prisma) {
       const positive = ["CASH_IN", "INCOME"].includes(input.type); const delta = positive ? input.amount : -input.amount;
       if (Number(shift.expectedCash) + delta < 0) throw new ConflictError("Cashbox balance cannot become negative");
       const transaction = await tx.cashTransaction.create({ data: { companyId, cashboxId: shift.cashboxId, shiftId, type: input.type, amount: input.amount, description: input.description } });
-      await tx.shift.update({ where: { id: shiftId }, data: { expectedCash: { increment: delta } } }); await tx.cashbox.update({ where: { id: shift.cashboxId }, data: { balance: { increment: delta } } }); return transaction;
+      await tx.shift.update({ where: { id: shiftId }, data: { expectedCash: { increment: delta } } });
+      await tx.cashbox.update({ where: { id: shift.cashboxId }, data: { balance: { increment: delta } } });
+      const accounts = {
+        CASH_IN: ["CASH_AND_BANK", "CASH_ADJUSTMENT"],
+        CASH_OUT: ["CASH_ADJUSTMENT", "CASH_AND_BANK"],
+        INCOME: ["CASH_AND_BANK", "OTHER_INCOME"],
+        EXPENSE: ["OPERATING_EXPENSE", "CASH_AND_BANK"],
+      };
+      const [debitAccount, creditAccount] = accounts[input.type] || [];
+      if (!debitAccount || !creditAccount) throw new ValidationError("Unsupported cash action type");
+      await tx.ledgerEntry.createMany({ data: [
+        { companyId, side: "DEBIT", account: debitAccount, amount: input.amount, referenceType: "CashTransaction", referenceId: transaction.id, description: input.description || input.type },
+        { companyId, side: "CREDIT", account: creditAccount, amount: input.amount, referenceType: "CashTransaction", referenceId: transaction.id, description: input.description || input.type },
+      ] });
+      return transaction;
     }); },
     async closeShift(companyId, employeeId, shiftId, input) { return prisma.$transaction(async (tx) => {
       const shift = await tx.shift.findFirst({ where: { id: shiftId, companyId, employeeId, status: "OPEN" } }); if (!shift) throw new NotFoundError("Open shift not found");

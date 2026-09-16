@@ -37,12 +37,12 @@ async function assertUniqueCodes(tx, companyId, productId, input) {
 }
 
 async function nextSku(tx, companyId) {
-  for (let attempt = 0; attempt < 100_000; attempt += 1) {
+  for (let attempt = 0; attempt < 1_000; attempt += 1) {
     const sequence = await tx.documentSequence.upsert({
       where: { companyId_type_year: { companyId, type: "SKU", year: 0 } },
       create: { companyId, type: "SKU", prefix: "", year: 0, value: 1 }, update: { value: { increment: 1 } },
     });
-    if (sequence.value > 99_999) throw new Error("SKU range exhausted");
+    // Keep the familiar five-digit format while small, but never impose a five-digit ceiling.
     const candidate = String(sequence.value).padStart(5, "0");
     const [product, variant] = await Promise.all([
       tx.product.findFirst({ where: { companyId, sku: candidate, deletedAt: null }, select: { id: true } }),
@@ -50,7 +50,62 @@ async function nextSku(tx, companyId) {
     ]);
     if (!product && !variant) return candidate;
   }
-  throw new Error("SKU range exhausted");
+  throw new ConflictError("Unable to generate a unique SKU; please enter one manually");
+}
+
+function normalizePriceRow(entry) {
+  const variantId = entry.variantId || null;
+  const packageId = entry.packageId || null;
+  if (variantId && packageId) throw new ValidationError("Price can target either a variant or a package, not both");
+  return {
+    priceListId: entry.priceListId,
+    variantId,
+    packageId,
+    scopeKey: packageId ? `PACKAGE:${packageId}` : variantId ? `VARIANT:${variantId}` : "BASE",
+    price: entry.price,
+  };
+}
+
+async function syncExplicitPrices(tx, companyId, productId, prices, { replaceAll = false } = {}) {
+  const now = new Date();
+  if (replaceAll) await tx.productPrice.updateMany({ where: { productId, validTo: null }, data: { validTo: now } });
+  if (!prices?.length) return;
+  const variants = await tx.productVariant.findMany({ where: { companyId, productId }, select: { id: true } });
+  const packages = await tx.productPackage.findMany({ where: { companyId, productId }, select: { id: true } });
+  const variantIds = new Set(variants.map((row) => row.id));
+  const packageIds = new Set(packages.map((row) => row.id));
+  const rows = prices.map(normalizePriceRow);
+  for (const row of rows) {
+    if (row.variantId && !variantIds.has(row.variantId)) throw new ValidationError("Price variant does not belong to product");
+    if (row.packageId && !packageIds.has(row.packageId)) throw new ValidationError("Price package does not belong to product");
+  }
+  if (!replaceAll) {
+    for (const row of rows) {
+      await tx.productPrice.updateMany({ where: { companyId, productId, priceListId: row.priceListId, scopeKey: row.scopeKey, validTo: null }, data: { validTo: now } });
+    }
+  }
+  await tx.productPrice.createMany({ data: rows.map((row) => ({ ...row, companyId, productId })) });
+}
+
+async function syncLegacyDefaultScopedPrices(tx, companyId, productId, { variantsTouched = false, packagesTouched = false } = {}) {
+  if (!variantsTouched && !packagesTouched) return;
+  const defaultList = await tx.priceList.findFirst({ where: { companyId, status: "ACTIVE", isDefault: true }, orderBy: { createdAt: "asc" } });
+  if (!defaultList) return;
+  const now = new Date();
+  if (variantsTouched) {
+    const variants = await tx.productVariant.findMany({ where: { companyId, productId, status: "ACTIVE" }, select: { id: true, price: true } });
+    const keys = variants.map((row) => `VARIANT:${row.id}`);
+    if (keys.length) await tx.productPrice.updateMany({ where: { companyId, productId, priceListId: defaultList.id, scopeKey: { in: keys }, validTo: null }, data: { validTo: now } });
+    const rows = variants.filter((row) => row.price != null).map((row) => ({ companyId, productId, priceListId: defaultList.id, variantId: row.id, scopeKey: `VARIANT:${row.id}`, price: row.price }));
+    if (rows.length) await tx.productPrice.createMany({ data: rows });
+  }
+  if (packagesTouched) {
+    const packages = await tx.productPackage.findMany({ where: { companyId, productId, status: "ACTIVE" }, select: { id: true, price: true } });
+    const keys = packages.map((row) => `PACKAGE:${row.id}`);
+    if (keys.length) await tx.productPrice.updateMany({ where: { companyId, productId, priceListId: defaultList.id, scopeKey: { in: keys }, validTo: null }, data: { validTo: now } });
+    const rows = packages.filter((row) => row.price != null).map((row) => ({ companyId, productId, priceListId: defaultList.id, packageId: row.id, scopeKey: `PACKAGE:${row.id}`, price: row.price }));
+    if (rows.length) await tx.productPrice.createMany({ data: rows });
+  }
 }
 
 const primaryRows = (rows = []) => rows.map((entry, index) => ({ ...entry, isPrimary: index === (rows.findIndex((row) => row.isPrimary) < 0 ? 0 : rows.findIndex((row) => row.isPrimary)) }));
@@ -148,14 +203,17 @@ export function createProductRepository(prisma) {
     find(companyId, id) { return prisma.product.findFirst({ where: { companyId, id, deletedAt: null }, include: PRODUCT_INCLUDE }); },
     create(companyId, employeeId, input) {
       return prisma.$transaction(async (tx) => {
-        const { barcodes = [], prices = [], openingStock = [], variants = [], packages = [], images = [], ...fields } = input;
+        const { barcodes = [], prices = [], openingStock = [], variants = [], packages = [], images = [], replacePrices: _replacePrices, ...fields } = input;
+        void _replacePrices;
         await assertProductReferences(tx, companyId, input);
         const sku = fields.sku || await nextSku(tx, companyId);
         await assertUniqueCodes(tx, companyId, null, { ...input, sku });
         const primaryImage = images.find((row) => row.isPrimary)?.url || images[0]?.url;
         const product = await tx.product.create({ data: { ...fields, imageUrl: fields.imageUrl || primaryImage, sku, companyId,
-          prices: { create: prices.map((entry) => ({ ...entry, companyId })) }, stocks: { create: openingStock.map((entry) => ({ ...entry, companyId, reserved: 0 })) } } });
+          stocks: { create: openingStock.map((entry) => ({ ...entry, companyId, reserved: 0 })) } } });
         await createRelations(tx, companyId, product.id, { images, barcodes, variants, packages });
+        if (prices.length) await syncExplicitPrices(tx, companyId, product.id, prices);
+        await syncLegacyDefaultScopedPrices(tx, companyId, product.id, { variantsTouched: variants.length > 0, packagesTouched: packages.length > 0 });
         if (openingStock.length) await tx.stockMovement.createMany({ data: openingStock.map((entry) => ({ companyId, employeeId, productId: product.id,
           warehouseId: entry.warehouseId, type: "OPENING", quantity: entry.onHand, balanceAfter: entry.onHand })) });
         return tx.product.findUnique({ where: { id: product.id }, include: PRODUCT_INCLUDE });
@@ -203,14 +261,12 @@ export function createProductRepository(prisma) {
           : input.barcodes;
         const codeInput = { ...input, sku: input.sku ?? current.sku, variants: mergedVariants, packages: mergedPackages, barcodes: mergedBarcodes };
         await assertProductReferences(tx, companyId, input); await assertUniqueCodes(tx, companyId, id, codeInput);
-        const { barcodes, prices, variants, packages, images, ...fields } = input;
+        const { barcodes, prices, variants, packages, images, replacePrices, ...fields } = input;
         if (images?.length && !fields.imageUrl) fields.imageUrl = images.find((row) => row.isPrimary)?.url || images[0]?.url;
         if (images && !images.length) fields.imageUrl = null;
         await syncRelations(tx, companyId, id, { barcodes, variants, packages, images });
-        if (prices) {
-          await tx.productPrice.updateMany({ where: { productId: id, validTo: null }, data: { validTo: new Date() } });
-          if (prices.length) await tx.productPrice.createMany({ data: prices.map((entry) => ({ ...entry, companyId, productId: id })) });
-        }
+        if (prices) await syncExplicitPrices(tx, companyId, id, prices, { replaceAll: Boolean(replacePrices) });
+        await syncLegacyDefaultScopedPrices(tx, companyId, id, { variantsTouched: variants !== undefined, packagesTouched: packages !== undefined });
         const data = await tx.product.update({ where: { id }, data: fields, include: PRODUCT_INCLUDE });
         return { before: current, data };
       }, { isolationLevel: "Serializable" });
