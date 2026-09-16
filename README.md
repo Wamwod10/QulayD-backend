@@ -111,7 +111,7 @@ npm run prisma:migrate:deploy
 npm run prisma:seed
 ```
 
-Use the Neon pooled connection string as `DATABASE_URL`. Prisma 7 reads it through `prisma.config.ts`; no secret belongs in source control.
+Use the Neon pooled connection string as `DATABASE_URL` for runtime traffic. If the host contains `-pooler`, set `DIRECT_DATABASE_URL` to Neon’s session/direct connection string as well; migration deploys prefer it because PostgreSQL advisory locks require a stable session. No secret belongs in source control.
 
 ## Verification
 
@@ -132,10 +132,11 @@ npm run check
 Before deploying:
 
 1. set `DATABASE_URL` to the Neon pooled PostgreSQL URL;
-2. set the exact frontend origin(s) in comma-separated `CORS_ORIGIN`;
-3. allow Render to generate independent JWT secrets;
-4. optionally configure `PASSWORD_RESET_WEBHOOK_URL` and `FRONTEND_RESET_URL`;
-5. keep `/var/data/qulay-uploads` mounted, or implement/configure an external object-storage provider.
+2. set `DIRECT_DATABASE_URL` to the matching non-pooler Neon URL (required when the pooled URL cannot hold advisory locks);
+3. set the exact frontend origin(s) in comma-separated `CORS_ORIGIN`;
+4. allow Render to generate independent JWT secrets;
+5. optionally configure `PASSWORD_RESET_WEBHOOK_URL` and `FRONTEND_RESET_URL`;
+6. keep `/var/data/qulay-uploads` mounted, or implement/configure an external object-storage provider.
 
 For horizontal scaling, images should move to S3-compatible storage; PostgreSQL business data remains canonical. Do not deploy with development secrets.
 

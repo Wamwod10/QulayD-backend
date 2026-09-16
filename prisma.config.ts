@@ -10,6 +10,12 @@ export default defineConfig({
     seed: "node prisma/seed.js",
   },
   datasource: {
-    url: process.env.DATABASE_URL || fallbackDatabaseUrl,
+    // Migrations must use a session-capable (non-pooler) URL when available.
+    // Runtime application connections continue to use DATABASE_URL.
+    url:
+      process.env.PRISMA_MIGRATE_DATABASE_URL ||
+      process.env.DIRECT_DATABASE_URL ||
+      process.env.DATABASE_URL ||
+      fallbackDatabaseUrl,
   },
 });
