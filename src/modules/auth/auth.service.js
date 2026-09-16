@@ -29,6 +29,10 @@ export function publicEmployee(employee) {
   const permissions = [...new Set(employee.roles?.flatMap(({ role }) =>
     role.permissions.map(({ permission }) => permission.code)) ?? [])];
   const modules = employee.modules?.filter((entry) => entry.enabled).map((entry) => entry.module) ?? [];
+  const legacyDriverText = `${employee.employeeType?.code || ""} ${employee.employeeType?.name || ""} ${employee.title || ""}`.toLocaleLowerCase("uz-UZ");
+  const legacyDriver = ["delivery_driver", "driver", "courier", "yetkazib beruvchi", "haydovchi", "kuryer"]
+    .some((token) => legacyDriverText.includes(token));
+  if (legacyDriver && !modules.includes("driver_workspace")) modules.push("driver_workspace");
   return {
     id: employee.id, companyId: employee.companyId, branchId: employee.branchId,
     warehouseId: employee.warehouseId, employeeTypeId: employee.employeeTypeId, login: employee.login, phone: employee.phone,

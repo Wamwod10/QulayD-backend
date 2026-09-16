@@ -441,6 +441,7 @@ model Product {
   categoryId        String?               @db.Uuid
   unitId            String                @db.Uuid
   supplierId        String?               @db.Uuid
+  primaryPriceListId String?              @db.Uuid
   sku               String
   name              String
   description       String?
@@ -464,6 +465,7 @@ model Product {
   category          Category?             @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   unit              Unit                  @relation(fields: [unitId], references: [id])
   supplier          Supplier?             @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  primaryPriceList  PriceList?            @relation("ProductPrimaryPriceList", fields: [primaryPriceListId], references: [id], onDelete: SetNull)
   images            ProductImage[]
   barcodes          ProductBarcode[]
   variants          ProductVariant[]
@@ -485,6 +487,7 @@ model Product {
   @@unique([companyId, sku])
   @@index([companyId, name])
   @@index([companyId, categoryId, status])
+  @@index([companyId, primaryPriceListId])
 }
 
 model ProductImage {
@@ -649,6 +652,7 @@ model PriceList {
   updatedAt DateTime       @updatedAt
   company   Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   prices    ProductPrice[]
+  primaryForProducts Product[] @relation("ProductPrimaryPriceList")
   orders    Order[]
 
   @@unique([companyId, code])

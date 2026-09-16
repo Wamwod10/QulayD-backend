@@ -84,7 +84,7 @@ function mergeBatchAllocations(existing, added) {
   return [...grouped.entries()].map(([batchId, quantity]) => ({ batchId, quantity }));
 }
 
-async function consumePickedBatches(tx, { companyId, order, orderItem, reservation, pickLine, baseQuantity, serials }) {
+async function consumePickedBatches(tx, { companyId, orderItem, reservation, pickLine, baseQuantity, serials }) {
   const product = orderItem.product;
   if (!product.trackLot && !product.trackExpiry) return [];
   const requiredByBatch = new Map();
@@ -167,7 +167,7 @@ async function consumeReservation(tx, { companyId, employeeId, order, reservatio
     if (changed.count !== baseQuantity) throw new ConflictError("Serial / IMEI holati parallel jarayonda o‘zgargan");
   }
 
-  const batchAllocations = await consumePickedBatches(tx, { companyId, order, orderItem, reservation, pickLine, baseQuantity, serials });
+  const batchAllocations = await consumePickedBatches(tx, { companyId, orderItem, reservation, pickLine, baseQuantity, serials });
   await changeStock(tx, {
     companyId,
     warehouseId: reservation.warehouseId,
@@ -412,6 +412,15 @@ export function createDeliveryRouter({ prisma }) {
             OR: [
               { modules: { some: { module: "driver_workspace", enabled: true } } },
               { roles: { some: { role: { code: { in: ["OWNER", "ADMIN"] } } } } },
+              { employeeType: { is: { OR: [
+                { code: { in: ["DELIVERY_DRIVER", "DRIVER", "COURIER"] } },
+                { name: { contains: "Yetkazib beruvchi", mode: "insensitive" } },
+                { name: { contains: "Haydovchi", mode: "insensitive" } },
+                { name: { contains: "Kuryer", mode: "insensitive" } },
+              ] } } },
+              { title: { contains: "Yetkazib beruvchi", mode: "insensitive" } },
+              { title: { contains: "Haydovchi", mode: "insensitive" } },
+              { title: { contains: "Kuryer", mode: "insensitive" } },
             ],
           },
           select: { id: true },
@@ -430,7 +439,7 @@ export function createDeliveryRouter({ prisma }) {
           plannedMinutes: input.plannedMinutes,
           number: await nextDocumentNumber(tx, companyId, "DELIVERY_TRIP", "TRIP"),
           status: "APPROVED",
-          deliveries: { create: orders.map((order, index) => ({ companyId, orderId: order.id, customerId: order.customerId, stopOrder: index + 1 })) },
+          deliveries: { create: orders.map((orderRow, index) => ({ companyId, orderId: orderRow.id, customerId: orderRow.customerId, stopOrder: index + 1 })) },
         },
         include: tripInclude,
       });

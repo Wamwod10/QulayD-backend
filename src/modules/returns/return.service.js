@@ -285,13 +285,13 @@ export function createReturnService(prisma) {
           : await tx.paymentMethodConfig.findFirst({ where: { companyId, method: input.method, status: "ACTIVE" } });
         if (!methodConfig) throw new ConflictError("Selected refund payment method is disabled or unavailable");
         allocations.push({ method: methodConfig.method, methodCode: methodConfig.code, amount: payoutRemaining });
-        payoutRemaining = 0;
       }
 
       const cashTotal = allocations.filter((row) => row.method === "CASH").reduce((sum, row) => sum + row.amount, 0);
-      let shift = null;
+      const shift = cashTotal > 0.009 && input.shiftId
+        ? await tx.shift.findFirst({ where: { id: input.shiftId, companyId, employeeId, status: "OPEN" }, include: { cashbox: true } })
+        : null;
       if (cashTotal > 0.009) {
-        shift = input.shiftId ? await tx.shift.findFirst({ where: { id: input.shiftId, companyId, employeeId, status: "OPEN" }, include: { cashbox: true } }) : null;
         if (!shift || shift.cashbox?.warehouseId !== doc.order.warehouseId || Number(shift.expectedCash) + 0.009 < cashTotal) {
           throw new ConflictError("Refund uchun shu omborga tegishli ochiq smenada yetarli naqd pul kerak", { cashRequired: cashTotal });
         }

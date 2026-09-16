@@ -2,7 +2,7 @@ import { PRODUCT_INCLUDE } from "./product.constants.js";
 import { ConflictError, ValidationError } from "../../../shared/errors/index.js";
 
 async function assertProductReferences(tx, companyId, input) {
-  const priceListIds = [...new Set((input.prices || []).map(({ priceListId }) => priceListId))];
+  const priceListIds = [...new Set([...(input.prices || []).map(({ priceListId }) => priceListId), input.primaryPriceListId].filter(Boolean))];
   const warehouseIds = [...new Set((input.openingStock || []).map(({ warehouseId }) => warehouseId))];
   const [unit, category, supplier, priceLists, warehouses] = await Promise.all([
     input.unitId ? tx.unit.count({ where: { id: input.unitId, companyId, status: "ACTIVE" } }) : 1,
@@ -175,10 +175,9 @@ async function syncRelations(tx, companyId, productId, input) {
       const variant = variantSku ? variantsBySku.get(variantSku) : variantId ? variantsById.get(variantId) : null;
       if ((variantSku || variantId) && !variant) throw new ValidationError("Package variant does not belong to this product");
       if (variant && row.status !== "INACTIVE" && variant.status === "INACTIVE") throw new ValidationError("Active package cannot reference an inactive variant");
-      let parentPackage = null;
       if (row.parentPackageId) {
         if (row.parentPackageId === id) throw new ValidationError("Package cannot be its own parent");
-        parentPackage = await tx.productPackage.findFirst({ where: { id: row.parentPackageId, productId, companyId }, select: { id: true, variantId: true, parentPackageId: true } });
+        const parentPackage = await tx.productPackage.findFirst({ where: { id: row.parentPackageId, productId, companyId }, select: { id: true, variantId: true, parentPackageId: true } });
         if (!parentPackage) throw new ValidationError("Parent package does not belong to this product");
         if (variant && parentPackage.variantId && parentPackage.variantId !== variant.id) throw new ValidationError("Package parent belongs to a different variant");
         if (id && parentPackage.parentPackageId === id) throw new ValidationError("Package hierarchy cannot contain a direct cycle");
@@ -209,6 +208,7 @@ export function createProductRepository(prisma) {
         const sku = fields.sku || await nextSku(tx, companyId);
         await assertUniqueCodes(tx, companyId, null, { ...input, sku });
         const primaryImage = images.find((row) => row.isPrimary)?.url || images[0]?.url;
+        fields.primaryPriceListId ||= prices.find((row) => !row.variantId && !row.packageId)?.priceListId || null;
         const product = await tx.product.create({ data: { ...fields, imageUrl: fields.imageUrl || primaryImage, sku, companyId,
           stocks: { create: openingStock.map((entry) => ({ ...entry, companyId, reserved: 0 })) } } });
         await createRelations(tx, companyId, product.id, { images, barcodes, variants, packages });
@@ -261,6 +261,10 @@ export function createProductRepository(prisma) {
           : input.barcodes;
         const codeInput = { ...input, sku: input.sku ?? current.sku, variants: mergedVariants, packages: mergedPackages, barcodes: mergedBarcodes };
         await assertProductReferences(tx, companyId, input); await assertUniqueCodes(tx, companyId, id, codeInput);
+        if (input.primaryPriceListId && input.prices === undefined) {
+          const primary = current.prices.find((row) => row.priceListId === input.primaryPriceListId && !row.variantId && !row.packageId);
+          if (!primary || Number(primary.price) <= 0) throw new ValidationError("The primary sale price must be greater than zero");
+        }
         const { barcodes, prices, variants, packages, images, replacePrices, ...fields } = input;
         if (images?.length && !fields.imageUrl) fields.imageUrl = images.find((row) => row.isPrimary)?.url || images[0]?.url;
         if (images && !images.length) fields.imageUrl = null;

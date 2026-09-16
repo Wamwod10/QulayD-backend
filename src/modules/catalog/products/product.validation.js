@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const imageUrl = z.union([z.url(), z.string().regex(/^\/uploads\/[A-Za-z0-9.-]+$/)]);
 const barcodeValue = z.string().trim().min(3).max(64);
-const skuValue = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._\/-]+$/, "SKU may contain letters, numbers, dot, underscore, slash and hyphen");
+const skuValue = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9._/-]+$/, "SKU may contain letters, numbers, dot, underscore, slash and hyphen");
 const barcode = z.object({ barcode: barcodeValue, isPrimary: z.boolean().optional() });
 const price = z.object({
   priceListId: z.uuid(), price: z.number().min(0),
@@ -37,6 +37,11 @@ function validateCollections(value, ctx) {
   if (value.prices) {
     const priceKeys = value.prices.map((row) => `${row.priceListId}:${row.packageId ? `PACKAGE:${row.packageId}` : row.variantId ? `VARIANT:${row.variantId}` : "BASE"}`);
     if (new Set(priceKeys).size !== priceKeys.length) ctx.addIssue({ code: "custom", path: ["prices"], message: "Price list + product scope must be unique" });
+    const primaryId = value.primaryPriceListId || value.prices.find((row) => !row.variantId && !row.packageId)?.priceListId;
+    const primaryPrice = value.prices.find((row) => row.priceListId === primaryId && !row.variantId && !row.packageId);
+    if (!primaryPrice || Number(primaryPrice.price) <= 0) {
+      ctx.addIssue({ code: "custom", path: ["prices"], message: "The primary sale price must be greater than zero" });
+    }
   }
   for (const [field, rows, key] of [["openingStock", value.openingStock, "warehouseId"], ["variants", value.variants, "sku"]]) {
     if (rows && new Set(rows.map((row) => row[key])).size !== rows.length) ctx.addIssue({ code: "custom", path: [field], message: `${field} references must be unique` });
@@ -52,7 +57,7 @@ function validateCollections(value, ctx) {
 
 const productBaseSchema = z.object({
   name: z.string().trim().min(2).max(200), sku: skuValue.optional(),
-  categoryId: z.uuid().nullable().optional(), unitId: z.uuid(), supplierId: z.uuid().nullable().optional(),
+  categoryId: z.uuid().nullable().optional(), unitId: z.uuid(), supplierId: z.uuid().nullable().optional(), primaryPriceListId: z.uuid().nullable().optional(),
   description: z.string().trim().max(2000).optional(), manufacturer: z.string().trim().max(160).optional(),
   model: z.string().trim().max(160).optional(), note: z.string().trim().max(2000).optional(), warehouseLocation: z.string().trim().max(120).optional(),
   imageUrl: imageUrl.optional(), images: z.array(productImage).max(10).optional(), costPrice: z.number().min(0).optional(), minStock: z.number().min(0).optional(),
@@ -61,5 +66,8 @@ const productBaseSchema = z.object({
   openingStock: z.array(stock).max(100).optional(), variants: z.array(variant).max(250).optional(), packages: z.array(productPackage).max(50).optional(),
 });
 
-export const productCreateSchema = productBaseSchema.superRefine(validateCollections);
+export const productCreateSchema = productBaseSchema.superRefine((value, ctx) => {
+  validateCollections(value, ctx);
+  if (!value.prices?.length) ctx.addIssue({ code: "custom", path: ["prices"], message: "A positive primary sale price is required" });
+});
 export const productUpdateSchema = productBaseSchema.omit({ openingStock: true }).partial().superRefine(validateCollections);
